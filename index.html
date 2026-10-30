@@ -568,6 +568,7 @@ const G = {
   fx: [], errors: [], paused: false, timeScale: 1,
   lv: null,                // метрики текущего уровня (см. newLevelMetrics)
   offer: null, plus5Used: 0, phaseUntil: 0, lastInput: 0, tipUntil: 0, sighAt: -1e9, overAt: 0, trayK: 0,
+  goalPulse: -1e9,         // когда табличка цели пульсирует (снята карта с туза, туз прилетел после нырка)
 };
 
 // ---------------------------------------------------------------------------
@@ -883,7 +884,7 @@ const easeIO = (t) => t < 0 ? 0 : t > 1 ? 1 : t < 0.5 ? 4 * t * t * t : 1 - Math
 const ease = (t) => t < 0 ? 0 : t > 1 ? 1 : 1 - (1 - t) * (1 - t);
 const VW = 400;                          // виртуальная ширина 2D-слоя (§2)
 let scale = 1, H = 700, safeT = 0, safeB = 0;
-const TRAY_H = 196;                      // нижняя панель: серия, призраки, отбой, колода, «на тузе»
+const TRAY_H = 196;                      // нижняя панель: серия, призраки, отбой, колода, цель (сколько карт на тузе)
 const HEADER_H = 58;
 function trayTop(){ return H - safeB / scale - TRAY_H; }
 function viewCenterY(k){                 // центр свободной области кадра, CSS px; k — насколько выехала панель (0..1)
@@ -1110,10 +1111,12 @@ function sparkFound(){
   const ph = pitHome(G.L); S.mesh.material.uniforms.uFaceRot.value = ph.flip; S.faceRot = ph.flip;
   tweenCam(ph, CFG.DIVE_MS, 'dive', () => {
     G.phase = 'play'; G.lv.playAt = now(); G.lastInput = now();
-    tip(G.li === 0 ? 'Снимай карту на 1 больше или меньше' : 'Сними всё с золотого туза', G.li < 2 ? 0 : 5000);
+    tip(G.li === 0 ? 'Достань золотой туз: снимай карты на 1 больше или меньше' : goalTip(), G.li < 2 ? 0 : 6000);
+    const gp = quadPose(cardQuad(G.L.gold)); addFx({ kind: 'goalfly', pose: gp, dur: 800 }); G.goalPulse = now() + 800;   // туз из ямы — в табличку цели
     checkStuck();
   });
 }
+function goalTip(){ const og = Math.max(0, onGold(G.st)); return og ? 'Цель — золотой туз: сними с него ' + og + ' ' + plural(og, 'карту', 'карты', 'карт') : 'Туз открыт — возьми его с K или 2'; }
 function playNode(q, how){
   const L = G.L, st = G.st, i = L.nodes[q];
   if (!ok(rk(st.top), rk(st.tab[q]))){ G.lv.wrong++; deny(i); Audio.wrong(); buzz(8); log('input', 'tap.rank', 'card=' + RANKS[rk(st.tab[q])] + ' top=' + RANKS[rk(st.top)]); return false; }
@@ -1123,6 +1126,7 @@ function playNode(q, how){
   const res = tapNode(L, st, q);
   G.aliveNow[i] = 0; G.lv.moves++;
   if (q !== L.goldIdx) addFx({ kind: 'fly', id: st.tab[q], quad, prev, dur: CFG.FLY_MS });   // туз летит отдельно — в центр (winSeq)
+  if (L.goalMask[q] && q !== L.goldIdx){ const p = quadPose(quad), a = goalGeo(); addFx({ kind: 'goal', x0: p.x, y0: p.y, x1: a.x, y1: a.y, dur: 480 }); G.goalPulse = now() + 480; }   // карта с туза: искра в табличку цели
   const t = now();
   for (const x of res.opened){
     if (x === L.goldIdx){ const c = cardCenter(L.gold); addFx({ kind: 'burst', x: c.x / scale, y: c.y / scale, dur: 600, n: 12, r: 34 }); continue; }
@@ -1181,6 +1185,7 @@ function landslide(){
   for (let q = 0; q < G.L.n; q++) if (q !== G.L.goldIdx) animNode(q, 2, t + R() * CFG.SLIDE_STAGGER_S * 1000);
   refreshData(); hud();
   reframe();                                    // камера доводит кадр, пока карты падают, а не после (палец не промахнётся)
+  G.goalPulse = t + 600;
   G.phase = 'slide'; G.phaseUntil = t + (CFG.SLIDE_S + CFG.SLIDE_STAGGER_S) * 1000;
   Audio.slide(); buzz([30, 40, 30]); toast('Оползень! Новая раздача');
   log('event', 'landslide', 'attempt=' + G.attempt); log('fx.start', 'slide');
@@ -1265,13 +1270,21 @@ function drawTray(c, t){
   if (!left){ c.strokeStyle = 'rgba(255,255,255,.3)'; c.setLineDash([5, 4]); c.lineWidth = 1.5; rr(c, d.x - d.w / 2, d.y - d.h / 2, d.w, d.h, 8); c.stroke(); c.setLineDash([]); }
   c.fillStyle = 'rgba(12,12,6,.88)'; rr(c, d.x - 18, d.y + d.h / 2 + 3, 36, 20, 10); c.fill();
   c.fillStyle = '#fff'; c.font = '900 13px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(left), d.x, d.y + d.h / 2 + 13);
-  // «на тузе»: мини-туз и счётчик карт, которые на нём лежат
-  const a = goalGeo(), og = Math.max(0, onGold(st));
-  drawCell(c, CELL_GOLD, a.x - a.w / 2, a.y - a.h / 2, a.w, a.h);
-  c.fillStyle = og ? 'rgba(12,12,6,.9)' : '#3fb27f'; c.beginPath(); c.arc(a.x + a.w / 2 - 2, a.y - a.h / 2 + 2, 13, 0, Math.PI * 2); c.fill();
-  c.fillStyle = '#fff'; c.font = '900 14px ' + FONT; c.fillText(og ? String(og) : '✓', a.x + a.w / 2 - 2, a.y - a.h / 2 + 3);
-  c.fillStyle = '#e9dfc6'; c.font = '800 11px ' + FONT; c.fillText(isWin(st) ? 'туз найден' : og ? 'на тузе' : 'туз открыт', a.x, a.y + a.h / 2 + 12);
-  if (!og && !isWin(st)){ c.fillText('нужен K или 2', a.x, a.y + a.h / 2 + 25); }
+  // цель: мини-копия золотого туза из ямы и сколько карт ещё лежит на нём (в яме у них оранжевый край)
+  const a = goalGeo(), og = Math.max(0, onGold(st)), won = isWin(st);
+  const pq = (t - G.goalPulse) / 340, pk = pq > 0 && pq < 1 ? 1 + 0.2 * Math.sin(pq * Math.PI) : 1;
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  if ('letterSpacing' in c) c.letterSpacing = '2px';
+  c.fillStyle = '#ffcf5a'; c.font = '900 11px ' + FONT; c.fillText('ЦЕЛЬ', a.x + 1, a.y - a.h / 2 - 11);
+  if ('letterSpacing' in c) c.letterSpacing = '0px';
+  c.save(); c.translate(a.x, a.y); c.scale(pk, pk);
+  if (!og || pk > 1){ c.shadowColor = '#ffc23d'; c.shadowBlur = !og ? 14 + 8 * pulse : 18; }
+  drawCell(c, CELL_GOLD, -a.w / 2, -a.h / 2, a.w, a.h); c.shadowBlur = 0;
+  c.restore();
+  if (!og){ c.fillStyle = '#3fb27f'; c.beginPath(); c.arc(a.x + a.w / 2 - 2, a.y - a.h / 2 + 2, 11, 0, Math.PI * 2); c.fill(); c.fillStyle = '#fff'; c.font = '900 13px ' + FONT; c.fillText('✓', a.x + a.w / 2 - 2, a.y - a.h / 2 + 3); }
+  const l1 = won ? 'туз твой!' : og ? og + ' ' + plural(og, 'карта', 'карты', 'карт') : 'туз открыт', l2 = won ? '' : og ? 'сними с туза' : 'возьми: K или 2';
+  c.fillStyle = og ? '#fff' : '#8ff0b8'; c.font = '900 13px ' + FONT; c.fillText(l1, a.x, a.y + a.h / 2 + 12);
+  if (l2){ c.fillStyle = '#e9dfc6'; c.font = '800 11px ' + FONT; c.fillText(l2, a.x, a.y + a.h / 2 + 26); }
 }
 function drawSpark(c, t){
   if (!G.L) return;
@@ -1328,6 +1341,15 @@ function drawFx(c, t){
       if (f.kind === 'goldfly'){ c.shadowColor = '#ffd36b'; c.shadowBlur = 30 * Math.sin(Math.min(1, q * 1.4) * Math.PI); }
       drawCell(c, f.id === -1 || f.kind === 'goldfly' ? CELL_GOLD : f.id, -w / 2, -h / 2, w, h);
       c.restore();
+    } else if (f.kind === 'goal'){              // карта с туза снята: золотая искра летит в табличку цели
+      const e = easeIO(q), x = f.x0 + (f.x1 - f.x0) * e, y = f.y0 + (f.y1 - f.y0) * e - Math.sin(e * Math.PI) * 40;
+      c.save(); c.shadowColor = '#ffb020'; c.shadowBlur = 12; c.fillStyle = '#ffd34d'; c.beginPath(); c.arc(x, y, 5.5 - 2 * e, 0, Math.PI * 2); c.fill(); c.restore();
+    } else if (f.kind === 'goalfly'){           // после нырка: туз из ямы перелетает в табличку цели — видно, что это он
+      const A = f.pose, a = goalGeo(), e = easeIO(q), x = A.x + (a.x - A.x) * e, y = A.y + (a.y - A.y) * e - Math.sin(e * Math.PI) * 60;
+      let da = -A.a; while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
+      const w = A.w + (a.w - A.w) * e, h = A.h + (a.h - A.h) * e;
+      c.save(); c.translate(x, y); c.rotate(A.a + da * e); c.shadowColor = '#ffc23d'; c.shadowBlur = 24; drawCell(c, CELL_GOLD, -w / 2, -h / 2, w, h); c.restore();
+      if (q < 0.75){ c.fillStyle = 'rgba(255,207,90,' + (1 - q / 0.75) + ')'; c.font = '900 14px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('ЦЕЛЬ', x, y - h / 2 - 12); }
     } else if (f.kind === 'deal'){              // карта колоды ложится на отбой, переворачиваясь на полпути
       const g = curGeo(), e = ease(q), x = f.x0 + (g.x - f.x0) * e, y = f.y0 + (g.y - f.y0) * e - Math.sin(e * Math.PI) * 18, sx = Math.abs(Math.cos(e * Math.PI));
       const w = 60 + (g.w - 60) * e, h = 84 + (g.h - 84) * e;
@@ -1397,7 +1419,7 @@ function goto(screen){
       <li>На общем плане найди искру — там золотой туз. Тапни её.</li>
       <li>Снимай открытые карты на 1 больше или меньше текущей: 7 → 6 или 8. K и A — соседи, масть не важна.</li>
       <li>Нет хода — тапни колоду. Серия рвётся.</li>
-      <li>Цель — сам золотой туз: он берётся с K или 2. Карты с оранжевым краем лежат на нём.</li>
+      <li>Цель — сам золотой туз: он берётся с K или 2. Карты с оранжевым краем лежат на нём; справа на панели — сколько их осталось.</li>
       <li>Колода кончилась — оползень засыпает яму, раздача заново. Когда до туза рукой подать — можно взять ещё горсть.</li>
       <li>Удержи палец на карте — лупа. Потяни — стог поворачивается, щипок — ближе.</li></ul>
       <button class="btn primary wide" data-act="${G.st && G.phase !== 'idle' ? 'resume' : 'menu'}">Понятно</button>`);
@@ -1608,7 +1630,7 @@ function tick(t, fromRaf){
   if (G.phase === 'won' && t >= G.phaseUntil){ G.phase = 'idle'; finishLevel(); }
   if (down && !down.moved && down.hold >= 0 && !down.loupe && t - down.t0 >= CFG.LOUPE_MS){ down.loupe = true; showLoupe(down.hold, down); }
   if (G.tipUntil && t > G.tipUntil){ tip(''); }
-  if (G.li === 1 && G.phase === 'play'){ const w = playable(G.L, G.st).length ? 'Сними всё с золотого туза' : G.st.stock.length ? 'Нет хода — тапни колоду' : ''; if ($('tip').textContent !== w) tip(w, 0); }
+  if (G.li === 1 && G.phase === 'play'){ const w = playable(G.L, G.st).length ? goalTip() : G.st.stock.length ? 'Нет хода — тапни колоду' : ''; if ($('tip').textContent !== w) tip(w, 0); }
   if (toastUntil && t > toastUntil){ $('toast').classList.add('hide'); toastUntil = 0; }
   renderUI(t);
   // к/с: только кадры rAF на игровом поле
