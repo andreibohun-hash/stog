@@ -159,7 +159,9 @@ const CFG = {
   PIT_ORBIT: 0.26,        // параллакс драгом в яме: ±рад по рыску (±15°)
   PIT_PITCH_SPAN: 0.16,   // и по наклону
   OVER_PITCH: 0.62,       // наклон камеры на общем плане, рад
-  OVER_YSCALE: 2.6,       // на общем плане стог вытянут по высоте во столько раз — силуэт стога (в яме 1)
+  OVER_YSCALE: 2.6,       // на общем плане стог вытянут по высоте во столько раз — силуэт стога
+  PIT_YSCALE: 0.15,       // в яме высоты сплющены: при утрированной толщине слоя карта на 10–16 слоёв выше съезжала под 55°
+                          // почти на свою высоту, и то, что лежит на карте, на экране висело рядом (туз ямы 4, 30.10)
   ZOOM_MIN: 0.7,          // щипок: множитель расстояния
   ZOOM_MAX: 1.6,
   INERTIA_K: 5,           // затухание инерции вращения, 1/с
@@ -781,7 +783,7 @@ function layPile(P){
 const VS = `
   attribute vec4 aData;   // x — ближняя ячейка, y — дальняя, z — тень (+2 — тёплый край), w — вид: 0 стог, 1 вне ямы, 2 закрыта, 3 открыта, 5 земля, 6 золото, −1 снята
   attribute vec2 aAnim;   // x — начало, с; y — 1 переворот, 2 падение оползнем
-  uniform float uPxPerUnit, uLodPx, uCols, uTime, uFlip, uSlide, uFaceRot; uniform vec2 uCell;
+  uniform float uPxPerUnit, uLodPx, uCols, uTime, uFlip, uSlide, uFaceRot, uYS; uniform vec2 uCell;   // uYS — сплющивание стога по высоте (анимации его не сплющивает)
   varying vec2 vUv; varying vec2 vLoc; varying float vShade; varying float vFlag; varying float vWarm;
   void main(){
     if (aData.w < -0.5){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
@@ -789,10 +791,10 @@ const VS = `
     if (aAnim.y > 0.5){
       if (aAnim.y < 1.5){
         float q = clamp((uTime - aAnim.x) / uFlip, 0.0, 1.0), th = 3.14159265 * (1.0 - q);
-        p = vec3(p.x * cos(th), p.x * sin(th) + 0.22 * sin(3.14159265 * q), p.z);
+        p = vec3(p.x * cos(th), (p.x * sin(th) + 0.22 * sin(3.14159265 * q)) / uYS, p.z);
         if (q < 0.5){ cn = 52.0; cf = 52.0; }
       } else {
-        float q = clamp((uTime - aAnim.x) / uSlide, 0.0, 1.0), e = 1.0 - q; p.y += 3.4 * e * e;
+        float q = clamp((uTime - aAnim.x) / uSlide, 0.0, 1.0), e = 1.0 - q; p.y += 3.4 * e * e / uYS;
       }
     }
     vec4 mvc = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
@@ -815,7 +817,7 @@ const FS = `
     vec3 c = texture2D(uMap, vUv).rgb * vShade;
     if (vFlag > 0.5 && vFlag < 1.5){ float g = dot(c, vec3(0.299, 0.587, 0.114)); c = mix(c, vec3(g) * 0.34 + vec3(0.03, 0.035, 0.015), uDim * 0.9); }
     if (vWarm > 0.5){ float e = min(min(vLoc.x, 1.0 - vLoc.x) * 0.714, min(vLoc.y, 1.0 - vLoc.y)); c = mix(c, vec3(1.0, 0.6, 0.16), (1.0 - smoothstep(0.03, 0.07, e)) * 0.95); }
-    if (vFlag > 5.5){ float s = sin((vLoc.x * 0.714 + vLoc.y) * 7.0 - uTime * 2.6); c += vec3(0.42, 0.3, 0.06) * smoothstep(0.7, 1.0, s); }
+    if (vFlag > 6.5){ float s = sin((vLoc.x * 0.714 + vLoc.y) * 7.0 - uTime * 2.6); c += vec3(0.42, 0.3, 0.06) * smoothstep(0.7, 1.0, s); }
     gl_FragColor = vec4(c, 1.0);
   }`;
 function initScene(){
@@ -833,7 +835,7 @@ function initScene(){
   S.aData = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4); geo.setAttribute('aData', S.aData);
   S.aAnim = new THREE.InstancedBufferAttribute(new Float32Array(N * 2), 2); geo.setAttribute('aAnim', S.aAnim);
   const mat = new THREE.ShaderMaterial({ vertexShader: VS, fragmentShader: FS, uniforms: {
-    uMap: { value: tex }, uPxPerUnit: { value: 1 }, uLodPx: { value: 44 }, uCols: { value: COLS }, uTime: { value: 0 }, uDim: { value: 0 }, uFaceRot: { value: 0 },
+    uMap: { value: tex }, uPxPerUnit: { value: 1 }, uLodPx: { value: 44 }, uCols: { value: COLS }, uTime: { value: 0 }, uDim: { value: 0 }, uFaceRot: { value: 0 }, uYS: { value: 1 },
     uFlip: { value: CFG.FLIP_S }, uSlide: { value: CFG.SLIDE_S }, uCell: { value: new THREE.Vector2(CELL_W / ATLAS_PX, CELL_H / ATLAS_PX) } } });
   S.mesh = new THREE.InstancedMesh(geo, mat, N); S.mesh.frustumCulled = false;
   const m = new THREE.Matrix4();
@@ -861,7 +863,8 @@ function refreshData(){
     let cov = 0; for (const j of P.above[i]) if (alive[j]) cov++;
     const shade = cov ? Math.max(0.5, 0.86 - 0.06 * cov) : 1;
     const q = nodeOf ? nodeOf[i] : -1;
-    if (L && q === L.goldIdx){ a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = Math.max(0.9, shade); a[o + 3] = 6; }
+    if (L && q === L.goldIdx){                    // золотой туз: в яме, пока на нём лежат карты, — тусклый, без блеска; открыт — блестит
+      const shut = on && st.cover[q] > 0; a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = shut ? 0.6 : Math.max(0.95, shade); a[o + 3] = shut ? 6 : 7; }
     else if (L && q >= 0 && on){
       const warm = L.goalMask[q] ? 2 : 0;
       if (st.cover[q] > 0){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK; a[o + 2] = Math.max(0.62, shade) + warm; a[o + 3] = 2; }
@@ -919,7 +922,7 @@ function pitHome(L){
     if (!best || score > best.score){ const uc = (u0 + u1) / 2, vc = (v0 + v1) / 2; best = { score, pxu, yaw, flip, cx: uc * ux + vc * vx, cz: uc * uz + vc * vz }; }
   }
   const f = frameFor(L, G.st, best.yaw);
-  return { kind: 'pit', tx: f.tx, ty: f.ty, tz: f.tz, yaw: best.yaw, pitch: CFG.PIT_PITCH, dist: f.dist, ys: 1, pxu: f.pxu, flip: best.flip };
+  return { kind: 'pit', tx: f.tx, ty: f.ty, tz: f.tz, yaw: best.yaw, pitch: CFG.PIT_PITCH, dist: f.dist, ys: CFG.PIT_YSCALE, pxu: f.pxu, flip: best.flip };
 }
 // Кадр по открытым картам ямы и тузу (их и тапают): углы центральных 70% карт проецируются виртуальной камерой с тем же наклоном и
 // сдвигом кадра, центр и масштаб доводятся за несколько итераций, пока все открытые не влезут в свободную область
@@ -932,9 +935,9 @@ function frameFor(L, st, yaw){
   if (!nodes.length) nodes.push(L.gold);
   const pts = []; let y = 0, sx = 0, sz = 0;
   for (const i of nodes){ const e = S.mats, o = i * 16; y += S.Y[i]; sx += P.x[i]; sz += P.y[i];
-    for (const [lx, lz] of [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]) pts.push([e[o] * lx + e[o + 8] * lz + e[o + 12], e[o + 1] * lx + e[o + 9] * lz + e[o + 13], e[o + 2] * lx + e[o + 10] * lz + e[o + 14]]); }
+    for (const [lx, lz] of [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]) pts.push([e[o] * lx + e[o + 8] * lz + e[o + 12], (e[o + 1] * lx + e[o + 9] * lz + e[o + 13]) * CFG.PIT_YSCALE, e[o + 2] * lx + e[o + 10] * lz + e[o + 14]]); }
   const rect = { x0: 6, x1: S.cssW - 6, y0: safeT + HEADER_H, y1: S.cssH - (safeB + TRAY_H * scale) - 62 };
-  let tx = sx / nodes.length, tz = sz / nodes.length, ty = y / nodes.length, pxu = CFG.PIT_PX;
+  let tx = sx / nodes.length, tz = sz / nodes.length, ty = y / nodes.length * CFG.PIT_YSCALE, pxu = CFG.PIT_PX;
   const distOf = (k) => S.cssH / (2 * Math.tan(CFG.FOV * Math.PI / 360) * k);
   for (let it = 0; it < 8; it++){
     const d = distOf(pxu), c = _fitCam;
@@ -994,7 +997,7 @@ function placeCamera(t){
   c.lookAt(CAM.tx, CAM.ty, CAM.tz);
   // «стог вздыхает» после взятого туза: короткая волна по высоте
   const sq = (t - G.sighAt) / 1200, sigh = sq > 0 && sq < 1 ? 1 + 0.06 * Math.sin(sq * Math.PI * 3) * (1 - sq) : 1;
-  S.ys = CAM.ys * sigh; S.mesh.scale.y = S.ys;
+  S.ys = CAM.ys * sigh; S.mesh.scale.y = S.ys; S.mesh.material.uniforms.uYS.value = S.ys;
   c.aspect = S.cssW / S.cssH;
   c.setViewOffset(S.cssW, S.cssH, 0, S.cssH / 2 - viewCenterY(G.trayK), S.cssW, S.cssH);
   c.updateProjectionMatrix(); c.updateMatrixWorld();
@@ -1650,7 +1653,7 @@ setInterval(() => { const t = now(); if (t - lastFrame > 120 && !G.paused){ last
 // Дебаг-хук (§6): состояние, любой экран, прогон времени, бот, точки для проверки касаниями
 // ---------------------------------------------------------------------------
 window.STOG = {
-  G, CFG, CAM, S,
+  G, CFG, CAM, S, get P(){ return pile(); }, quad(i){ return cardQuad(i); },
   state(){
     const st = G.st, L = G.L;
     return { screen: G.screen, phase: G.phase, level: G.li + 1, attempt: G.attempt, top: st ? RANKS[rk(st.top)] : null, deck: st ? st.stock.length : null,
