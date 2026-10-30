@@ -130,6 +130,8 @@ const CFG = {
     normal: { R: 2,    lo: 5, hi: 9, D: 16 },    // обычная яма: на тузе 5–9, R 2, колода 16
   },
   JOIN_IN_R: true,        // карта, открывшаяся под ямой, входит в игру, если её центр в круге R (иначе «земля» без лица)
+  START_MOVE: true,       // на старте раздачи есть ход без колоды: стартовая меняется местами с первой подходящей из колоды
+                          // (Андрей 30.10; набор карт тот же, иначе ~30% раздач начинались с добора)
   NEAR: 3,                // «+5» предлагается, если на тузе осталось ≤ стольких карт (туз не считается)
   PLUS5_N: 5,             // карт в «ещё горсти»
   PLUS5_TRIES: 60,        // наборов перебирает «+5 под игрока» (первая подходящая 2-й или 3-й, жадный доигрывает)
@@ -169,11 +171,10 @@ const CFG = {
   DRAG_RAD_PER_PX: 0.006, // вращение драгом
   TAP_SLOP_PX: 10,        // палец сдвинулся дальше — драг, тапа нет
   TAP_ASSIST_PX: 16,      // промах мимо открытой карты ямы не дальше стольких px засчитывается по ней
-  SPARK_TAP_PX: 42,       // тап по искре на общем плане засчитывается в этом радиусе
   LOUPE_MS: 600,          // удержание столько — лупа над пальцем, отпускание после неё — не ход
   LOUPE_RING_MS: 180,     // кольцо прогресса лупы с этого момента
   DIVE_MS: 1300,          // нырок камеры с общего плана в яму
-  HINT_SPARK_MS: 5000,    // рука показывает искру, если её не нашли за столько (только урок)
+  OVER_SHOW_MS: 1700,     // общий план перед ямой: стог и искра на месте туза, потом нырок сам (тап — сразу); искру не ищут (Андрей 30.10)
   HINT_IDLE_MS: 3500,     // рука показывает ход на уроке после стольких мс бездействия
   FLY_MS: 380,            // карта летит из ямы на отбой
   DEAL_MS: 260,           // карта колоды ложится на отбой
@@ -383,9 +384,25 @@ function chainDeal(L){
   return st;
 }
 function dealSeed(li, attempt){ return 1000 * (li + 1) + 7919 * attempt + 17; }
+// Ход на старте: если стартовая ни к чему не подходит, она меняется местами с первой картой колоды (или остатка шуза),
+// которая подходит к открытой карте ямы. Ранги те же, что раздала колода, меняется только порядок.
+function ensureStartMove(L, st){
+  if (playable(L, st).length) return st;
+  const ex = exposed(L, st).filter(q => q !== L.goldIdx);
+  const fits = (v) => ex.some(q => ok(rk(v), rk(st.tab[q])));
+  for (const arr of [st.stock, st.rest]){
+    const i = arr.findIndex(fits);
+    if (i < 0) continue;
+    const old = st.top; st.known[rk(old)]--; st.top = arr[i]; arr[i] = old; st.known[rk(st.top)]++;
+    return st;
+  }
+  return st;
+}
 function newDeal(li, attempt){
   const L = levelPit(li);
-  return LEVELS[li].kind === 'tiny' ? chainDeal(L) : deal(L, L.D, mulberry32(dealSeed(li, attempt || 0)));
+  if (LEVELS[li].kind === 'tiny') return chainDeal(L);
+  const st = deal(L, L.D, mulberry32(dealSeed(li, attempt || 0)));
+  return CFG.START_MOVE ? ensureStartMove(L, st) : st;
 }
 function cloneSt(st){ return { ...st, tab: st.tab.slice(), present: st.present.slice(), cover: st.cover.slice(), stock: st.stock.slice(), rest: st.rest.slice(), pool: st.pool.slice(), known: st.known.slice() }; }
 // снять карту q (без проверки правил); возвращает узлы, которые открылись
@@ -1082,7 +1099,7 @@ function aliveFromSave(){
 }
 function cardsLeft(){ let n = 0; const a = G.aliveNow; for (let i = 0; i < a.length; i++) n += a[i]; return n; }
 function newLevelMetrics(li){
-  return { level: li + 1, startAt: now(), overAt: 0, sparkMs: null, overMiss: 0, playAt: 0, levelMs: null, playMs: null, attempts: 1,
+  return { level: li + 1, startAt: now(), overAt: 0, playAt: 0, levelMs: null, playMs: null, attempts: 1,
     closed: 0, dead: 0, wrong: 0, assist: 0, moves: 0, draws: 0, forks: 0, coldPicks: 0, plus5: [], loupes: 0, frames: 0, frameMs: 0, dts: [] };
 }
 function pickSparks(){
@@ -1099,7 +1116,8 @@ function startLevel(li, fromPit){
   clearAnims(); refreshData(); S.mesh.material.uniforms.uDim.value = 0;
   goto('game');
   const h = overHome(li);
-  const beginOver = () => { G.phase = 'over'; G.overAt = now(); G.lv.overAt = G.overAt; tip('Найди золотой туз — тапни искру', 0); log('event', 'over.start', 'level=' + (li + 1)); };
+  const beginOver = () => { G.phase = 'over'; G.overAt = now(); G.lv.overAt = G.overAt; G.phaseUntil = G.overAt + CFG.OVER_SHOW_MS;
+    tip(li === 0 ? 'В стоге 10 000 карт и один золотой туз' : 'Следующий золотой туз — здесь', 0); log('event', 'over.start', 'level=' + (li + 1)); };
   if (fromPit){ G.phase = 'pullout'; tweenCam(h, 1500, 'pullout', beginOver); }
   else { Object.assign(CAM, h); home = { ...h }; zoom = 1; camTw = null; beginOver(); }
   hud();
@@ -1107,8 +1125,7 @@ function startLevel(li, fromPit){
 }
 function sparkFound(){
   if (G.phase !== 'over') return;
-  const t = now(); G.lv.sparkMs = Math.round(t - G.overAt);
-  log('event', 'spark.found', 'ms=' + G.lv.sparkMs);
+  log('event', 'dive', 'level=' + (G.li + 1));
   G.phase = 'dive'; G.pitOn = true; refreshData(); Audio.spark(); buzz(15);
   const c = cardCenter(G.L.gold); addFx({ kind: 'burst', x: c.x / scale, y: c.y / scale, dur: 700, n: 16, r: 46 });
   const ph = pitHome(G.L); S.mesh.material.uniforms.uFaceRot.value = ph.flip; S.faceRot = ph.flip;
@@ -1213,7 +1230,7 @@ function finishLevel(){
 }
 function summarize(lv){
   const d = lv.dts.slice().sort((a, b) => a - b), p95 = d.length ? d[Math.min(d.length - 1, Math.floor(d.length * 0.95))] : null;
-  return { level: lv.level, sparkMs: lv.sparkMs, overMiss: lv.overMiss, levelMs: lv.levelMs, playMs: lv.playMs, attempts: lv.attempts,
+  return { level: lv.level, levelMs: lv.levelMs, playMs: lv.playMs, attempts: lv.attempts,
     closed: lv.closed, dead: lv.dead, wrong: lv.wrong, assist: lv.assist, moves: lv.moves, draws: lv.draws, forks: lv.forks, coldPicks: lv.coldPicks,
     plus5: lv.plus5.map(o => ({ frame: o.frame, onGold: o.onGold, attempt: o.attempt, taken: o.taken, ms: o.ms })), loupes: lv.loupes,
     fps: lv.frameMs ? +(1000 * lv.frames / lv.frameMs).toFixed(1) : null, p95ms: p95 === null ? null : +p95.toFixed(1) };
@@ -1292,7 +1309,7 @@ function drawTray(c, t){
 function drawSpark(c, t){
   if (!G.L) return;
   const p = cardCenter(G.L.gold); if (p.z > 1) return;
-  const x = p.x / scale, y = p.y / scale, k = 0.5 + 0.5 * Math.sin(t / 260), late = G.phase === 'over' && t - G.overAt > 9000 && G.li > 0;
+  const x = p.x / scale, y = p.y / scale, k = 0.5 + 0.5 * Math.sin(t / 260);
   // искра: золотая звезда с тёмной обводкой и лучами — видна и на белых картах, но мала, чтобы её надо было найти
   c.save(); c.translate(x, y);
   c.rotate(t / 900); c.strokeStyle = 'rgba(255,214,90,' + (0.35 + 0.45 * k) + ')'; c.lineWidth = 2;
@@ -1304,7 +1321,7 @@ function drawSpark(c, t){
   c.lineWidth = 1.6; c.strokeStyle = 'rgba(110,55,0,.9)'; c.stroke();
   c.fillStyle = '#fffbe6'; c.beginPath(); c.arc(0, 0, 2.6, 0, Math.PI * 2); c.fill();
   c.restore();
-  if (late){ const q = ((t - G.overAt) % 1600) / 1600; c.strokeStyle = 'rgba(255,220,120,' + (1 - q) * 0.8 + ')'; c.lineWidth = 2; c.beginPath(); c.arc(x, y, 12 + q * 40, 0, Math.PI * 2); c.stroke(); }
+  if (G.phase === 'over'){ const q = ((t - G.overAt) % 900) / 900; c.strokeStyle = 'rgba(255,220,120,' + (1 - q) * 0.85 + ')'; c.lineWidth = 2.5; c.beginPath(); c.arc(x, y, 14 + q * 46, 0, Math.PI * 2); c.stroke(); }   // кольца зовут взгляд к тузу
 }
 function drawHand(c, x, y, t){                 // рука-подсказка: палец касается точки, лёгкое нажатие
   const k = 0.5 + 0.5 * Math.sin(t / 220), dy = 6 * k;
@@ -1317,7 +1334,6 @@ function drawHand(c, x, y, t){                 // рука-подсказка: �
 }
 function hintTarget(t){                         // подсказка рукой: только на уроке и при знакомстве с колодой
   if (G.screen !== 'game') return null;
-  if (G.phase === 'over' && G.li === 0 && t - G.overAt > CFG.HINT_SPARK_MS){ const p = cardCenter(G.L.gold); return { x: p.x / scale, y: p.y / scale }; }
   if (G.phase !== 'play' || G.li > 1 || t - G.lastInput < CFG.HINT_IDLE_MS || down) return null;
   const pl = playable(G.L, G.st);
   if (pl.length && G.li === 0){ const q = pickVisibleTarget(pl, nodeVisible); if (q >= 0){ const p = cardCenter(G.L.nodes[q]); return { x: p.x / scale, y: p.y / scale }; } }
@@ -1410,7 +1426,7 @@ function goto(screen){
   if (screen === 'game'){ hideCard(); return; }
   if (screen === 'menu'){
     const lvl = Math.min(G.save.level, LEVELS.length - 1), done = G.save.level >= LEVELS.length;
-    show(`<h2>Стог</h2><p>10 000 карт. Где-то в стоге — золотой туз. Найди искру, разгреби яму, достань туз.</p>
+    show(`<h2>Стог</h2><p>10 000 карт. Где-то в стоге — золотой туз. Разгреби яму, достань туз — и к следующей стопке.</p>
       <div class="row" style="flex-direction:column">
       ${G.L && !['idle', 'won'].includes(G.phase) ? '<button class="btn primary wide" data-act="resume">Продолжить яму ' + (G.li + 1) + '</button>' :
         `<button class="btn primary wide" data-act="play">${done ? 'Ещё раз с 1-й ямы' : G.save.level ? 'Дальше: яма ' + (lvl + 1) + ' из ' + LEVELS.length : 'Играть'}</button>`}
@@ -1419,7 +1435,7 @@ function goto(screen){
       ${G.save.level ? '<button class="btn wide" data-act="restart">Начать тест заново</button>' : ''}</div>`);
   }
   if (screen === 'help') show(`<h2>Как играть</h2><ul class="help">
-      <li>На общем плане найди искру — там золотой туз. Тапни её.</li>
+      <li>В стоге 10 000 карт. Искра на общем плане — там следующий золотой туз; камера сама ныряет к нему.</li>
       <li>Снимай открытые карты на 1 больше или меньше текущей: 7 → 6 или 8. K и A — соседи, масть не важна.</li>
       <li>Нет хода — тапни колоду. Серия рвётся.</li>
       <li>Цель — сам золотой туз: он берётся с K или 2. Карты с оранжевым краем лежат на нём; справа на панели — сколько их осталось.</li>
@@ -1437,26 +1453,25 @@ function goto(screen){
     const m = G.save.metrics[G.li] || {}, last = G.li >= LEVELS.length - 1, left = cardsLeft();
     show(`<div class="big-gold">A</div><h2>Золотой туз № ${G.li + 1}</h2><p>В стоге ${left.toLocaleString('ru-RU')} ${plural(left, 'карта', 'карты', 'карт')}. ${last ? 'Все десять тузов найдены!' : 'Следующий туз уже блестит.'}</p>
       <div class="stats"><div>${fmtS(m.levelMs)} с<small>время</small></div><div>${m.attempts || 1}<small>${plural(m.attempts || 1, 'раздача', 'раздачи', 'раздач')}</small></div><div>${G.save.coins}<small>монет</small></div></div>
-      <button class="btn primary wide" data-act="${last ? 'results' : 'next'}">${last ? 'Итоги теста' : 'Дальше'}</button>`);
+      <button class="btn primary wide" data-act="${last ? 'results' : 'next'}">${last ? 'Итоги теста' : 'К следующей стопке'}</button>`);
   }
   if (screen === 'results') show(resultsHtml());
 }
 function resultsHtml(){
   const M = G.save.metrics, rows = [];
-  let n = 0, sSpark = 0, nSpark = 0, sMiss = 0, sTime = 0, forks = 0, colds = 0, sFps = 0, nFps = 0, worst = 0, p5o = 0, p5t = 0;
+  let n = 0, sMiss = 0, sTime = 0, forks = 0, colds = 0, sFps = 0, nFps = 0, worst = 0, p5o = 0, p5t = 0;
   for (let li = 0; li < LEVELS.length; li++){
     const m = M[li]; if (!m) continue; n++;
     const p5 = m.plus5.map(o => (o.taken ? '+' : '−') + (o.frame === 'ace-open' ? 'Т' : o.onGold)).join(' ') || '—';
-    rows.push(`<tr><td>${li + 1}</td><td>${fmtS(m.sparkMs)}</td><td>${m.closed}/${m.dead}</td><td>${fmtS(m.levelMs)}</td><td>${m.attempts}</td><td>${p5}</td><td>${m.forks ? m.coldPicks + '/' + m.forks : '—'}</td><td>${m.fps === null ? '—' : Math.round(m.fps)}</td></tr>`);
-    if (m.sparkMs !== null){ sSpark += m.sparkMs; nSpark++; }
+    rows.push(`<tr><td>${li + 1}</td><td>${m.closed}/${m.dead}</td><td>${fmtS(m.levelMs)}</td><td>${m.attempts}</td><td>${p5}</td><td>${m.forks ? m.coldPicks + '/' + m.forks : '—'}</td><td>${m.fps === null ? '—' : Math.round(m.fps)}</td></tr>`);
     sMiss += m.closed + m.dead; sTime += m.levelMs || 0; forks += m.forks; colds += m.coldPicks;
     if (m.fps !== null){ sFps += m.fps; nFps++; } if (m.p95ms) worst = Math.max(worst, m.p95ms);
     for (const o of m.plus5){ p5o++; if (o.taken) p5t++; }
   }
   if (!n) return `<h2>Итоги теста</h2><p>Пока пусто — пройди хотя бы одну яму.</p><button class="btn primary wide" data-act="menu">Меню</button>`;
-  rows.push(`<tr class="tot"><td>Σ</td><td>${nSpark ? fmtS(sSpark / nSpark) : '—'}</td><td>${(sMiss / n).toFixed(1).replace('.', ',')}</td><td>${fmtS(sTime / n)}</td><td></td><td>${p5t}/${p5o}</td><td>${forks ? Math.round(100 * colds / forks) + '%' : '—'}</td><td>${nFps ? Math.round(sFps / nFps) : '—'}</td></tr>`);
-  return `<h2>Итоги теста</h2><table class="res"><tr><th>яма</th><th>искра, с</th><th>закр./ мёртв.</th><th>время, с</th><th>раз- дач</th><th>«+5»</th><th>нетёп- лая</th><th>к/с</th></tr>${rows.join('')}</table>
-    <div class="goal">Цели плана: искра ≤ 3 с; тапов по закрытым и мёртвым &lt; 1 за уровень; уровень 40–70 с; 60 к/с (худшие 5% кадров: ${worst ? worst.toFixed(0) + ' мс' : '—'}).
+  rows.push(`<tr class="tot"><td>Σ</td><td>${(sMiss / n).toFixed(1).replace('.', ',')}</td><td>${fmtS(sTime / n)}</td><td></td><td>${p5t}/${p5o}</td><td>${forks ? Math.round(100 * colds / forks) + '%' : '—'}</td><td>${nFps ? Math.round(sFps / nFps) : '—'}</td></tr>`);
+  return `<h2>Итоги теста</h2><table class="res"><tr><th>яма</th><th>закр./ мёртв.</th><th>время, с</th><th>раз- дач</th><th>«+5»</th><th>нетёп- лая</th><th>к/с</th></tr>${rows.join('')}</table>
+    <div class="goal">Цели плана: тапов по закрытым и мёртвым &lt; 1 за уровень; уровень 40–70 с; 60 к/с (худшие 5% кадров: ${worst ? worst.toFixed(0) + ' мс' : '—'}).
     «+5»: + взял, − отказался; Т — туз открыт, цифра — карт на тузе. «Нетёплая» — взял карту не с туза, когда подходила и тёплая. Итог — среднее за уровень.</div>
     <div class="row"><button class="btn primary" data-act="copy">Скопировать JSON</button><button class="btn" data-act="menu">Меню</button></div>`;
 }
@@ -1551,12 +1566,7 @@ gameEl.addEventListener('pointerup', onUp); gameEl.addEventListener('pointercanc
 gameEl.addEventListener('wheel', (e) => { e.preventDefault(); if (home) zoom = Math.max(CFG.ZOOM_MIN, Math.min(CFG.ZOOM_MAX, zoom * (e.deltaY > 0 ? 1.08 : 0.93))); }, { passive: false });
 function tapAt(p){
   if (G.screen !== 'game') return;
-  if (G.phase === 'over'){
-    const s = cardCenter(G.L.gold), dd = Math.hypot(p.x - s.x, p.y - s.y);
-    log('input', 'tap.over', 'dist=' + Math.round(dd));
-    if (dd <= CFG.SPARK_TAP_PX) sparkFound(); else G.lv.overMiss++;
-    return;
-  }
+  if (G.phase === 'over'){ log('input', 'tap.over'); sparkFound(); return; }   // тап на общем плане — сразу в яму
   if (G.phase !== 'play') return;
   if (inTray(p)){ if (inRect(p, deckGeo(), 10)) deckTap(); return; }
   const hit = pickCard(p.x, p.y), q = hit >= 0 ? G.nodeOf[hit] : -1;
@@ -1631,6 +1641,7 @@ function tick(t, fromRaf){
   if (G.phase === 'stuck' && t >= G.phaseUntil){ if (nearMiss(G.st)) offerPlus5(); else landslide(); }
   if (G.phase === 'slide' && t >= G.phaseUntil){ G.phase = 'play'; log('fx.end', 'slide'); G.lastInput = t; checkStuck(); reframe(); }
   if (G.phase === 'won' && t >= G.phaseUntil){ G.phase = 'idle'; finishLevel(); }
+  if (G.phase === 'over' && t >= G.phaseUntil && G.screen === 'game') sparkFound();   // общий план показан — ныряем сами
   if (down && !down.moved && down.hold >= 0 && !down.loupe && t - down.t0 >= CFG.LOUPE_MS){ down.loupe = true; showLoupe(down.hold, down); }
   if (G.tipUntil && t > G.tipUntil){ tip(''); }
   if (G.li === 1 && G.phase === 'play'){ const w = playable(G.L, G.st).length ? goalTip() : G.st.stock.length ? 'Нет хода — тапни колоду' : ''; if ($('tip').textContent !== w) tip(w, 0); }
