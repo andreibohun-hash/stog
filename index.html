@@ -130,6 +130,14 @@ const CFG = {
     normal: { R: 2,    lo: 5, hi: 9, D: 16 },    // обычная яма: на тузе 5–9, R 2, колода 16
   },
   JOIN_IN_R: true,        // карта, открывшаяся под ямой, входит в игру, если её центр в круге R (иначе «земля» без лица)
+  ASSIST: {              // помощь в уровнях теста (Андрей 30.10: «винрейт выше, первая половина уровня проще»): невидимая
+                          // подтасовка только в тупике и только обменом с неизвестной картой — набор карт тот же
+    on: true,
+    HALF: 0.5,            //   «первая половина» — пока снято меньше этой доли карт с туза (сам туз считается)
+    DRAW: [0.8, 0.15],    //   добор: верхняя карта колоды ни к чему не подходит — с такой вероятностью (1-я / 2-я половина)
+                          //   на её место встаёт подходящая из глубины колоды
+    FLIP: [0.8, 0.15],    //   снятие: хода не осталось, а открылась карта — с такой вероятностью она продолжает серию
+  },
   START_MOVE: true,       // на старте раздачи есть ход без колоды: стартовая меняется местами с первой подходящей из колоды
                           // (Андрей 30.10; набор карт тот же, иначе ~30% раздач начинались с добора)
   NEAR: 3,                // «+5» предлагается, если на тузе осталось ≤ стольких карт (туз не считается)
@@ -414,7 +422,29 @@ function newDeal(li, attempt){
   const L = levelPit(li);
   if (LEVELS[li].kind === 'tiny') return chainDeal(L);
   const st = deal(L, L.D, mulberry32(dealSeed(li, attempt || 0)));
+  if (CFG.ASSIST.on) st.rig = { R: mulberry32(dealSeed(li, attempt || 0) * 3 + 11), draws: 0, flips: 0 };   // помощь (см. CFG.ASSIST)
   return CFG.START_MOVE ? ensureStartMove(L, st) : st;
+}
+// ---------- помощь в тупике (CFG.ASSIST): только обмен с неизвестными картами ----------
+function assistP(L, st, which){ const A = CFG.ASSIST; if (!st.rig || !A.on) return 0; return (1 - st.gl / L.goalN) < A.HALF ? A[which][0] : A[which][1]; }
+function fitsOpen(L, st, v){ for (let q = 0; q < L.n; q++) if (st.present[q] && st.cover[q] === 0 && ok(rk(v), rk(st.tab[q]))) return true; return false; }
+// перед добором: верх колоды ни к чему не подходит — меняется местами с первой подходящей картой из глубины колоды
+function rigDraw(L, st){
+  if (st.stock.length < 2 || fitsOpen(L, st, st.stock[0]) || st.rig.R() >= assistP(L, st, 'DRAW')) return false;
+  const j = st.stock.findIndex((v, i) => i > 0 && fitsOpen(L, st, v)); if (j < 0) return false;
+  const t = st.stock[0]; st.stock[0] = st.stock[j]; st.stock[j] = t; st.rig.draws++; return true;
+}
+// после снятия: хода не осталось, а открылись карты — первая открывшаяся получает ранг, продолжающий серию (обмен
+// с картой из глубины колоды или с закрытой картой ямы; туз ямы не трогается)
+function rigFlip(L, st, opened){
+  const op = opened.filter(x => x !== L.goldIdx);
+  if (!op.length || playable(L, st).length || st.rig.R() >= assistP(L, st, 'FLIP')) return false;
+  const x = op[0], want = (v) => ok(rk(st.top), rk(v)), old = st.tab[x];
+  let j = -1; for (let i = st.stock.length - 1; i >= 1; i--) if (want(st.stock[i])){ j = i; break; }
+  if (j >= 0){ st.tab[x] = st.stock[j]; st.stock[j] = old; }
+  else { let y = -1; for (let q = 0; q < L.n; q++) if (q !== L.goldIdx && st.present[q] && st.cover[q] > 0 && want(st.tab[q])){ y = q; break; }
+    if (y < 0) return false; st.tab[x] = st.tab[y]; st.tab[y] = old; }
+  st.known[rk(old)]--; st.known[rk(st.tab[x])]++; st.rig.flips++; return true;
 }
 function cloneSt(st){ return { ...st, tab: st.tab.slice(), present: st.present.slice(), cover: st.cover.slice(), stock: st.stock.slice(), rest: st.rest.slice(), pool: st.pool.slice(), known: st.known.slice() }; }
 // снять карту q (без проверки правил); возвращает узлы, которые открылись
@@ -437,9 +467,10 @@ function tapNode(L, st, q){
   if (st.cover[q] > 0) return { ok: false, why: 'covered' };
   if (!ok(rk(st.top), rk(st.tab[q]))) return { ok: false, why: 'rank' };
   const opened = removeCard(L, st, q); st.top = st.tab[q]; st.streak++; st.last = q;
+  if (st.rig) rigFlip(L, st, opened);
   return { ok: true, opened };
 }
-function tapDeck(st){ if (!st.stock.length) return false; drawCard(st); return true; }
+function tapDeck(st, L){ if (!st.stock.length) return false; if (st.rig && L) rigDraw(L, st); drawCard(st); return true; }
 
 // ================= боты (как в симе панели) =================
 function pickGreedy(L, st, ex, pl, R, goalW){
@@ -522,11 +553,15 @@ function loop(L, st, cfg, R, m){
     if (act === -1){
       if (m && st.streak){ m.stS += st.streak; m.stN++; if (st.streak > m.maxSt) m.maxSt = st.streak; }
       if (!st.stock.length) return false;
-      drawCard(st); if (m){ m.taps++; m.draws++; }
+      if (cfg.rig && st.rig) rigDraw(L, st);
+      const h1 = (1 - st.gl / L.goalN) < CFG.ASSIST.HALF;
+      drawCard(st); if (m){ m.taps++; m.draws++; if (h1){ m.tapsH1++; m.drawsH1++; } }
     } else {
       if (m && pl.length > 1 && !L.goalMask[act] && pl.some(q => L.goalMask[q])) m.coldPick++;
-      removeCard(L, st, act); st.top = st.tab[act]; st.streak++; st.last = act;
-      if (m){ m.taps++; m.removed++; if (st.streak > m.maxSt) m.maxSt = st.streak; }
+      const h1 = (1 - st.gl / L.goalN) < CFG.ASSIST.HALF;
+      const opened = removeCard(L, st, act); st.top = st.tab[act]; st.streak++; st.last = act;
+      if (cfg.rig && st.rig) rigFlip(L, st, opened);
+      if (m){ m.taps++; m.removed++; if (h1) m.tapsH1++; if (st.streak > m.maxSt) m.maxSt = st.streak; }
     }
   }
 }
@@ -607,7 +642,7 @@ function endlessBotRun(seed, bot, p5){
   }
   return run;
 }
-function newMetrics(){ return { dec: 0, open: 0, play: 0, noMove: 0, single: 0, eqFork: 0, realFork: 0, warmFork: 0, coldPick: 0, taps: 0, draws: 0, removed: 0, stS: 0, stN: 0, maxSt: 0, pDec: 0, sig: 0, diff: 0, drawWithMove: 0 }; }
+function newMetrics(){ return { dec: 0, open: 0, play: 0, noMove: 0, single: 0, eqFork: 0, realFork: 0, warmFork: 0, coldPick: 0, taps: 0, draws: 0, tapsH1: 0, drawsH1: 0, removed: 0, stS: 0, stN: 0, maxSt: 0, pDec: 0, sig: 0, diff: 0, drawWithMove: 0 }; }
 // партия бота на яме L: без «+5», с честной и с «+5 под игрока» (как playLevel сима панели)
 function playPit(L, cfg, seed, dealFn){
   const R = mulberry32(seed), RB = mulberry32(seed * 7919 + 13);
@@ -1175,7 +1210,8 @@ function aliveFromSave(){
 function cardsLeft(){ let n = 0; const a = G.aliveNow; for (let i = 0; i < a.length; i++) n += a[i]; return n; }
 function newLevelMetrics(li){
   return { level: li + 1, startAt: now(), overAt: 0, playAt: 0, levelMs: null, playMs: null, attempts: 1,
-    closed: 0, dead: 0, wrong: 0, assist: 0, moves: 0, draws: 0, forks: 0, coldPicks: 0, plus5: [], loupes: 0, frames: 0, frameMs: 0, dts: [] };
+    closed: 0, dead: 0, wrong: 0, assist: 0, moves: 0, draws: 0, forks: 0, coldPicks: 0, plus5: [], loupes: 0, frames: 0, frameMs: 0, dts: [],
+    rigDraws: 0, rigFlips: 0 };   // сколько раз сработала помощь в тупике (CFG.ASSIST), по всем раздачам уровня
 }
 function pickSparks(){
   const L = G.L, R = mulberry32(G.mode === 'endless' ? G.run.seed * 977 + G.run.pits * 31 + 5 : dealSeed(G.li, G.attempt) * 13 + 5), cand = [];
@@ -1290,7 +1326,7 @@ function deckTap(){
   if (G.phase !== 'play') return;
   const st = G.st;
   if (!st.stock.length){ Audio.wrong(); log('input', 'deck.empty'); return; }
-  const prev = st.top; tapDeck(st); G.lv.draws++;
+  const prev = st.top; tapDeck(st, G.L); G.lv.draws++;
   const d = deckGeo(); addFx({ kind: 'deal', id: st.top, prev, x0: d.x, y0: d.y, dur: CFG.DEAL_MS });
   Audio.draw(); buzz(5); log('input', 'deck', 'top=' + RANKS[rk(st.top)] + ' left=' + st.stock.length);
   hud(); checkStuck();
@@ -1323,6 +1359,7 @@ function declinePlus5(){
 }
 // оползень: яма засыпана, новая раздача на той же яме (попытка +1); карты падают сверху в свои места
 function landslide(){
+  if (G.st && G.st.rig){ G.lv.rigDraws += G.st.rig.draws; G.lv.rigFlips += G.st.rig.flips; }
   G.attempt++; G.lv.attempts++; G.st = newDeal(G.li, G.attempt);
   for (const i of G.L.nodes) G.aliveNow[i] = 1;
   pickSparks();
@@ -1349,6 +1386,7 @@ function finishLevel(){
   const L = G.L, st = G.st, lv = G.lv;
   const removed = L.nodes.filter((i, q) => !st.present[q]);
   G.save.removed[G.li] = removed;
+  if (st.rig){ lv.rigDraws += st.rig.draws; lv.rigFlips += st.rig.flips; }
   G.save.metrics[G.li] = summarize(lv);
   G.save.level = Math.min(G.li + 1, LEVELS.length); save();
   G.aliveNow = aliveFromSave(); G.pitOn = false; refreshData();
@@ -1358,7 +1396,7 @@ function summarize(lv){
   const d = lv.dts.slice().sort((a, b) => a - b), p95 = d.length ? d[Math.min(d.length - 1, Math.floor(d.length * 0.95))] : null;
   return { level: lv.level, levelMs: lv.levelMs, playMs: lv.playMs, attempts: lv.attempts,
     closed: lv.closed, dead: lv.dead, wrong: lv.wrong, assist: lv.assist, moves: lv.moves, draws: lv.draws, forks: lv.forks, coldPicks: lv.coldPicks,
-    plus5: lv.plus5.map(o => ({ frame: o.frame, onGold: o.onGold, attempt: o.attempt, taken: o.taken, ms: o.ms })), loupes: lv.loupes,
+    plus5: lv.plus5.map(o => ({ frame: o.frame, onGold: o.onGold, attempt: o.attempt, taken: o.taken, ms: o.ms })), loupes: lv.loupes, rigDraws: lv.rigDraws, rigFlips: lv.rigFlips,
     fps: lv.frameMs ? +(1000 * lv.frames / lv.frameMs).toFixed(1) : null, p95ms: p95 === null ? null : +p95.toFixed(1) };
 }
 function coins(n, x, y, why){
