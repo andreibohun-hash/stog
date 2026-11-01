@@ -450,6 +450,12 @@ const CFG = {
     JOKER_WIN_MS: 2600,   //   радужный джокер взят: столько до отъезда к следующей куче…
     PILE_OUT_MS: 1700,    //   …камера отъезжает так, что рядом видна куча побольше…
     PILE_MOVE_MS: 1700,   //   …и переезжает к ней
+    PILE_H_MIN: 0.42,     //   куча оседает со счётом (Андрей 01.11: «фейково, но филлово и красиво»): высоты стога ×(от 1 до этого, когда разобрана)…
+    PILE_H_POW: 0.7,      //   …по (осталось/было)^столько — первые ямы оседают заметнее…
+    PILE_SETTLE_MS: 900,  //   …между ямами — оседание за время счётчика и пружинка столько мс…
+    PILE_SETTLE_DIP: 0.07,//   …с провалом до стольких высоты, пыль у подножия и лёгкая тряска
+    PILE_CUT_MIN: 0.95,   //   след кучи тоже сжимается: нижние карты вне ямы дальше (от 2,3 до стольких радиусов кучи) не рисуются…
+    PILE_CUT_H: 0.22,     //   …если лежат ниже такой доли высоты стога (тонкий подол; бока холма остаются)
     PILE_GROW: 1.55,      //   следующая куча — тот же стог, показанный во столько раз крупнее (фейк «куча больше»)
     SHRINK_DOWN_MS: 1100, //   …затем нырок к следующему тузу (кривые нырка)
     TROPHY_FADE_AT: 1300, //   бесконечный: трофей с этого момента (от взятия) за TROPHY_FADE_MS уменьшается до 0,6 и гаснет
@@ -1181,6 +1187,7 @@ const G = {
   missTips: 0,             // подсказок «эта карта не в яме» за сессию
   srchNearAt: 0, pinchUsed: false,   // поиск: первое приближение (для подсказки про щипок) и был ли щипок
   shrink: null, pitFrom: 0,          // бесконечный: взгляд на стог между ямами { from, to, t0, descAt, down }; карт в стоге на старте ямы
+  pileH: 1,               // высота стога ×K (куча оседает со счётом, pileHTarget; в placeCamera — к ys и точке взгляда)
   pileIntro: null, pileMove: null, jokerWinAt: -1e9,   // кучи: табличка новой кучи { t0, k, N, left }; переезд к следующей { P, off, mesh, run, L }; взят джокер
 };
 
@@ -1369,6 +1376,7 @@ const Audio = {
     this.bus = b; log('sound', 'win');
   },
   joker(){ [0, 4, 7, 12, 16].forEach((d, i) => this.bell(784 * 2 ** (d / 12), 0.05, 1.1, 0.12 + i * 0.09)); this.burst({ dur: 1.2, vol: 0.05, type: 'bandpass', f0: 900, f1: 4000, att: 0.4, at: 0.1 }); log('sound', 'joker'); },   // радужный джокер взят
+  settle(k){ this.tok(95, 60, 0.32, 0.08 + 0.08 * k); this.burst({ dur: 0.6, vol: 0.04 + 0.03 * k, type: 'lowpass', f0: 600, f1: 140, att: 0.05 }); log('sound', 'settle', 'k=' + k.toFixed(2)); },   // стог осел
   rise(){ this.burst({ dur: 0.7, vol: 0.05, type: 'bandpass', q: 1.4, f0: 260, f1: 1300, att: 0.5 }); log('sound', 'rise'); },   // подъём на общий план между ямами
   // счётчик стога бежит вниз: шорох колоды — четыре раза, тише и реже, в конце мягкий «тук»
   shrink(at){ [0, 0.14, 0.3, 0.5].forEach((d, i) => this.riffle(CFG.FX.RIFFLE_VOL * (0.8 - 0.15 * i), at + d)); this.tok(150, 95, 0.12, 0.08, at + 0.8); log('sound', 'shrink'); },
@@ -1622,12 +1630,15 @@ const VS = `
   uniform vec3 uLight; uniform float uHillK, uMaxHs;   // свет (привязан к экрану), сила света холма (1 — общий план, 0,3 — яма), высота стога в мире
   uniform vec4 uFocus, uSigh;   // прожектор ямы: xy — центр (мир), z..w — от полного света до тёмного; волна «вздоха»: xy — центр, z — старт (с), w — амплитуда
   uniform vec2 uSighK;          // волна «вздоха»: скорость (высот карты в секунду), длительность (с) — CFG.FX.SIGH_SPEED, SIGH_S
+  uniform vec2 uCut;            // куча оседает: нижние карты вне ямы дальше uCut.x от центра и ниже uCut.y (мир) не рисуются — подол тает к центру
   varying vec2 vOrgN, vOrgF, vFu; varying float vLodK;   // начала ближней и дальней ячеек в атласе, координата в ячейке, доля ближней
   varying vec2 vLoc; varying float vShade; varying float vFlag; varying float vWarm; varying float vAlmost;
   varying vec3 vHill; varying float vSpec, vHgt, vMicro, vPaint;   // свет холма, блик, высота в стоге 0..1, доля микро-LOD, краска (0 чёрн., 1 красн., 2 рубашка, 3 золото)
   varying float vFocus, vFlipK;   // 0 у ямы … 1 далеко от неё; вспышка лица в момент раскрытия
   void main(){
     if (aData.w < -0.5){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    if (aData.w < 1.5 || (aData.w > 4.5 && aData.w < 5.5)){ vec3 o = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;   // только вне ямы
+      if (length(o.xz) > uCut.x && o.y < uCut.y){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; } }
     vec3 p = position; float cn = aData.x, cf = aData.y; vFlipK = 0.0;
     if (aAnim.y > 0.5){
       if (aAnim.y < 1.5){   // переворот: быстро в начале, мягко в конце; до старта — рубашкой
@@ -1844,7 +1855,7 @@ function initScene(){
     uLight: { value: new THREE.Vector3(-0.5, 0.8, 0.3).normalize() }, uHillK: { value: 1 }, uMaxHs: { value: 1 },   // свет, холм — ставят placeCamera и tick
     uFocus: { value: new THREE.Vector4(0, 0, 1e3, 1e3 + 1) }, uSigh: { value: new THREE.Vector4(0, 0, -1e3, 0) }, uDimBias: { value: CFG.DIM_BIAS }, uDprBias: { value: 0 },
     uDimLod: { value: CFG.DIM_LOD }, uBackLod: { value: CFG.FX.BACKDROP_LOD }, uSighK: { value: new THREE.Vector2(CFG.FX.SIGH_SPEED, CFG.FX.SIGH_S) },
-    uRes: { value: new THREE.Vector2(1, 1) }, uVC: { value: new THREE.Vector2(0.5, 0.5) }, uBackdrop: { value: 0 }, uJoker: { value: 0 } } });   // uRes, uVC, uBackdrop — общие с землёй; uJoker — ячейки золота сейчас джокер
+    uRes: { value: new THREE.Vector2(1, 1) }, uVC: { value: new THREE.Vector2(0.5, 0.5) }, uBackdrop: { value: 0 }, uJoker: { value: 0 }, uCut: { value: new THREE.Vector2(1e4, 0) } } });   // uRes, uVC, uBackdrop — общие с землёй; uJoker — ячейки золота сейчас джокер
   // земля: стерня, тень стога (вправо-вниз по экрану) и виньетка — в шейдере; рисуется после карт (renderOrder 10), только там, где карт нет
   S.groundMat = new THREE.ShaderMaterial({ vertexShader: GROUND_VS, fragmentShader: GROUND_FS, depthWrite: false, uniforms: {
     uTex: { value: stubbleTex() }, uRad: { value: 1 }, uShC: { value: new THREE.Vector2() }, uShD: { value: new THREE.Vector2(1, 0) }, uBackdrop: S.mat.uniforms.uBackdrop,
@@ -2143,10 +2154,14 @@ function clampOrbit(){
   } else CAM.pitch = Math.max(CFG.FX.OVER_PITCH_MIN, Math.min(1.15, CAM.pitch));   // ниже 0,5 в кадр попадает горизонт за краем земли
 }
 function placeCamera(t){
-  const c = S.camera, cp = Math.cos(CAM.pitch);
-  c.position.set(CAM.tx + CAM.dist * cp * Math.sin(CAM.yaw), CAM.ty + CAM.dist * Math.sin(CAM.pitch), CAM.tz + CAM.dist * cp * Math.cos(CAM.yaw));
-  c.lookAt(CAM.tx, CAM.ty, CAM.tz);
-  S.ys = CAM.ys; S.mesh.scale.y = S.ys; S.shMesh.scale.y = S.ys; S.mesh.material.uniforms.uYS.value = S.ys; if (G.pileMove && G.pileMove.mesh) G.pileMove.mesh.scale.y = S.ys * G.pileMove.grow;
+  const c = S.camera, cp = Math.cos(CAM.pitch), ty = CAM.ty * G.pileH;   // осевший стог: высоты и точка взгляда — ×pileH
+  c.position.set(CAM.tx + CAM.dist * cp * Math.sin(CAM.yaw), ty + CAM.dist * Math.sin(CAM.pitch), CAM.tz + CAM.dist * cp * Math.cos(CAM.yaw));
+  c.lookAt(CAM.tx, ty, CAM.tz);
+  S.ys = CAM.ys * G.pileH; S.mesh.scale.y = S.ys; S.shMesh.scale.y = S.ys; S.mesh.material.uniforms.uYS.value = S.ys;
+  { const FX = CFG.FX, hk = Math.max(0, Math.min(1, (G.pileH - FX.PILE_H_MIN) / (1 - FX.PILE_H_MIN))), P = SP();   // подол тает вместе с высотой
+    S.mat.uniforms.uCut.value.set(hk > 0.999 ? 1e4 : P.rad * (FX.PILE_CUT_MIN + (2.3 - FX.PILE_CUT_MIN) * hk), S.maxH * S.ys * FX.PILE_CUT_H); }
+  if (G.pileMove && G.pileMove.mesh){ const m = G.pileMove.mesh; m.scale.y = CAM.ys * G.pileMove.grow; const pu = m.material.uniforms;   // следующая куча — во весь рост и без подола
+    for (const k in pu) if (k !== 'uCut') pu[k].value = S.mat.uniforms[k].value; }
   c.aspect = S.cssW / S.cssH;
   // тряска — только 3D-слой (сдвиг кадра): панель и 2D не трясутся; огибающая — нарастание до peak, затем спад к dur
   let sx = 0, sy = 0; const sh = G.shake;
@@ -2327,6 +2342,20 @@ function startEndless(){
   goto('game'); log('event', 'endless.start', 'run=' + G.run.seed + ' pile=' + (sv.k + 1) + ' left=' + endlessLeft() + ' deck=' + (G.st ? G.st.stock.length : 'new'));
   endlessSave(); nextEndlessPit(true);
 }
+// стог осел: пыль по подножию (передняя половина круга в кадре), лёгкая тряска 3D-слоя, глухой «ух» под шорох
+function pileSettleFx(t, dh){
+  const P = SP(), n = 18, k = Math.min(1, dh * 10);
+  for (let i = 0; i < n; i++){ const a = Math.PI * 2 * i / n, p = toScreen(new THREE.Vector3(Math.sin(a) * P.rad * 0.95, 0, Math.cos(a) * P.rad * 0.95));
+    if (p.z < 1) spawn('puff', 2, p.x / scale, p.y / scale, { life: CFG.FX.PUFF_MS * 1.6 }, i * 31 + Math.round(t)); }
+  shake({ dur: 420, amp: 1.2 + 1.8 * k, peak: 90, hz: 11 }, 'pile.settle'); Audio.settle(k);
+}
+// высота стога по счёту кучи: 1 — полная, PILE_H_MIN — разобрана (за меню — по сейву); в поиске и тесте — 1
+function pileHFor(left, shown){ const FX = CFG.FX, f = Math.max(0, Math.min(1, left / Math.max(1, shown))); return FX.PILE_H_MIN + (1 - FX.PILE_H_MIN) * Math.pow(f, FX.PILE_H_POW); }
+function pileHTarget(){
+  if (G.mode === 'endless' && G.run) return pileHFor(endlessLeft(), G.run.shown);
+  if (G.mode === 'search' || CFG.MODES.campaign) return 1;
+  const ep = G.save.endless.pile, sp = endlessSpec(ep ? ep.k : 0); return pileHFor(sp.shown - (ep && ep.fake || 0), sp.shown);
+}
 // сколько карт в куче показываем (фейк: убыль за яму — endlessFake)
 function endlessLeft(){ const r = G.run; return r ? Math.max(0, r.shown - r.fake) : 0; }
 function endlessSoon(){ if (!G.busy) startEndless(); }   // вид у всех куч — стог теста, строить нечего
@@ -2359,7 +2388,7 @@ function nextEndlessPit(first, ready){   // ready — яма, посчитанн
     G.pitOn = false; refreshData(); G.phase = 'glide';
     if (G.preWinTop !== null){ ringPush(G.preWinTop); G.landAt = now(); G.landAmp = 1; landDust(G.landAt, (G.run.pits + 1) * 53 + G.preWinTop + 7); }   // на отбое — st.top (A♥) с посадкой и пылью, под ним карта, с которой взят туз
     const FX = CFG.FX, t = now(), to = endlessLeft();
-    G.shrink = { from: Math.max(to, G.pitFrom || to), to, t0: t, descAt: 0, down: 0 }; G.pitFrom = to;   // счётчик — сколько ушло за яму
+    G.shrink = { from: Math.max(to, G.pitFrom || to), to, t0: t, descAt: 0, down: 0, hFrom: G.pileH, hTo: pileHFor(to, G.run.shown) }; G.pitFrom = to;   // счётчик — сколько ушло за яму; стог оседает с ним
     addFx({ kind: 'endless.shrink', t0: t, dur: FX.SHRINK_UP_MS + FX.SHRINK_HOLD_MS, info: G.shrink.from + '→' + to });
     Audio.rise(); Audio.shrink(FX.SHRINK_COUNT_AT / 1000);
     const oh = overHome(-1, CAM.yaw - 0.35);
@@ -2516,10 +2545,10 @@ function endlessPileSwap(){
   dropPreview(); setScenePile(M.P); setFaces(pileFaceSeed(M.k)); setGoldSkin('gold');
   const g = M.grow, sc = (o) => { if (!o) return; o.tx = (o.tx - M.off.x) / g; o.tz = (o.tz - M.off.z) / g; o.ty /= g; o.dist /= g; };
   sc(CAM); sc(home);
-  G.run = M.run; G.aliveNow = G.run.alive; G.covDirty = true; G.pileMove = null; clearAnims();
+  G.run = M.run; G.aliveNow = G.run.alive; G.covDirty = true; G.pileMove = null; G.pileH = 1; clearAnims();   // новая куча — во весь рост
   nextEndlessPit(true, M.L);
 }
-function dropPreview(){ const M = G.pileMove; if (M && M.mesh){ S.scene.remove(M.mesh); M.mesh.geometry.dispose(); M.mesh = null; } }
+function dropPreview(){ const M = G.pileMove; if (M && M.mesh){ S.scene.remove(M.mesh); M.mesh.geometry.dispose(); M.mesh.material.dispose(); M.mesh = null; } }
 // следующая куча рядом с текущей: укладка — сразу в кэш (после переезда setScenePile берёт её же), свой меш со сдвигом;
 // карты лицом по тому же сиду, что у сцены, без ямы; материал общий
 function previewPile(P, off, grow, faceSeed){
@@ -2534,7 +2563,8 @@ function previewPile(P, off, grow, faceSeed){
   for (let i = 0; i < N; i++){ const id = Math.floor(R() * 52), cov = P.above[i].length, o = (N - 1 - i) * 4; ad[o] = id; ad[o + 1] = CELL_FAR0 + id; ad[o + 2] = cov ? Math.max(0.5, 0.86 - 0.06 * cov) : 1; ad[o + 3] = 0; }
   geo.setAttribute('aData', new THREE.InstancedBufferAttribute(ad, 4)); geo.setAttribute('aAnim', new THREE.InstancedBufferAttribute(new Float32Array(N * 2), 2));
   geo.setAttribute('aHill', new THREE.InstancedBufferAttribute(lc.hill, 3));
-  const mesh = new THREE.InstancedMesh(geo, S.mat, N), m = new THREE.Matrix4(); mesh.frustumCulled = false;
+  const mat = S.mat.clone(); mat.uniforms.uCut.value = new THREE.Vector2(1e4, 0);   // свои униформы: подол не режется (остальные — копия S.mat каждый кадр)
+  const mesh = new THREE.InstancedMesh(geo, mat, N), m = new THREE.Matrix4(); mesh.frustumCulled = false;
   for (let i = 0; i < N; i++){ m.fromArray(lc.mats, i * 16); mesh.setMatrixAt(N - 1 - i, m); }
   mesh.position.set(off.x, 0, off.z); mesh.scale.set(grow, grow * S.ys, grow); mesh.instanceMatrix.needsUpdate = true; S.scene.add(mesh);
   return { mesh, maxH: lc.maxH };
@@ -3985,6 +4015,13 @@ function tick(t, fromRaf){
     if (G.shrink && G.shrink.descAt && !G.shrink.down && t >= G.shrink.descAt) endlessDescend();   // счётчик добежал — нырок к следующей яме
   }
   if (down && !down.moved && down.hold >= 0 && !down.loupe && t - down.t0 >= CFG.LOUPE_MS){ down.loupe = true; showLoupe(down.hold, down); }
+  // высота стога: между ямами — оседание вместе со счётчиком, пружинка, пыль у подножия, лёгкая тряска; в окне победы ямы — ждёт взгляда
+  { const Z = G.shrink, FX = CFG.FX;
+    if (Z && Z.hFrom !== undefined){ const k = (t - Z.t0 - FX.SHRINK_COUNT_AT) / FX.SHRINK_COUNT_MS, dh = Math.max(0, Z.hFrom - Z.hTo);
+      if (k < 0) G.pileH = Z.hFrom; else if (k < 1) G.pileH = Z.hFrom + (Z.hTo - Z.hFrom) * easeInOutSine(k);
+      else { const e = Math.min(1, (t - Z.t0 - FX.SHRINK_COUNT_AT - FX.SHRINK_COUNT_MS) / FX.PILE_SETTLE_MS); G.pileH = Z.hTo - FX.PILE_SETTLE_DIP * Math.min(1, dh * 8) * Math.sin(2 * Math.PI * e) * (1 - e) * (1 - e); }
+      if (k >= 0.5 && !Z.puffed && dh > 0.002){ Z.puffed = true; pileSettleFx(t, dh); } }
+    else if (!(G.mode === 'endless' && G.phase === 'won')) G.pileH += (pileHTarget() - G.pileH) * fk(G.phase === 'pile' ? 0.04 : 0.1); }
   if (G.tipUntil && t > G.tipUntil){ const b = G.tipBack; G.tipBack = null; G.tipKind = ''; G.tipUntil = 0;   // разовая отыграла — под ней была своя
     if (b && b.txt && (!b.until || b.until > t)) tip(b.txt, b.until ? b.until - t : 0, b.kind); else tip(''); }
   // бейдж цели: число меняется, когда долетает искра с туза (подсказка цели берёт его же — меняются вместе)
@@ -4118,7 +4155,7 @@ async function boot(){
   const t1 = now(); pile(); const tPile = now() - t1;   // стог теста строится при загрузке
   makeSprites(); fit(); initScene(); fit();
   try { S.atlasBmp = await createImageBitmap(S.atlas); } catch (e) { S.atlasBmp = null; }   // без createImageBitmap 2D рисует прямо с S.atlas
-  G.aliveNow = aliveFromSave(); refreshData(); G.coinsShown = G.save.coins;
+  G.aliveNow = aliveFromSave(); refreshData(); G.coinsShown = G.save.coins; G.pileH = pileHTarget();   // за меню — куча из сейва уже осевшей
   // прогрев до первого нырка: все меши в сцене и видимы — земля, контактная тень (count 1), ореол; шейдеры собираются заранее
   // (compileAsync — без блокировки, подпись загрузки не замирает). Кадры: общий план, яма (затемнение, тень и ореол включены —
   // все ветки шейдеров), общий план. 2D — атлас, спрайты и шрифт по пикселю
