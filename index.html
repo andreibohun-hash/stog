@@ -226,17 +226,17 @@ const CFG = {
     CHECK_N: 40,          //   партий жадного на проверку ямы-кандидата
     CORRIDOR: [40, 80],   //   ямы, где жадный с колодой 16 (как в обычной яме) выигрывает реже или чаще, пропускаются
     TRIES: 60,            //   кандидатов в золотые на один поиск
-    // кучи (Андрей 01.11): у каждой цель — радужный джокер ближе к концу; нашёл — рядом куча заметно больше, на ней дальше.
-    // Карт, слоёв (плоская маленькая куча — иначе почти все карты глубже hi и ям нет), lo — минимум карт на тузе, сид;
-    // дальше — последняя с новыми сидами. Время — `node sim.mjs piles` (жадный, 1,8 с на действие, 9 с на переходы ямы)
+    // кучи (Андрей 01.11): у каждой цель — радужный джокер почти в самом конце; нашёл — рядом куча заметно больше, на ней дальше.
+    // Вид — всегда стог теста (Андрей: «смотреться как в прошлой версии, пусть даже фейк»), карт в куче и их убыль — фейк:
+    // shown — сколько карт показываем, jokerPits — за сколько ям в среднем доходим до джокера; дальше — ×2,5 и +8 ям.
+    // За яму со счёта уходит shown·JOKER_AT/jokerPits × (0,6 + 0,8 · доля снятого в яме). Время — `node sim.mjs piles`
     PILES: [
-      { N: 140, layers: 5, lo: 3, seed: 501 },     //   джокер на 8–12-й яме, ~12–15 мин (жадный)
-      { N: 450, layers: 7, lo: 3, seed: 502 },
-      { N: 1200, layers: 10, lo: 4, seed: 503 },
-      { N: 3000, layers: 14, lo: 5, seed: 504 },
-      { N: 10000, layers: 20, lo: 5, seed: 7 },    //   стог теста — граф уже построен
+      { shown: 10000, jokerPits: 8 },     //   джокер на 8–9-й яме, ~13–16 мин (жадный, 1,8 с на действие, 9 с на переходы ямы)
+      { shown: 25000, jokerPits: 15 },
+      { shown: 60000, jokerPits: 22 },
+      { shown: 150000, jokerPits: 30 },
     ],
-    JOKER_AT: 0.62,       //   радужный джокер — золотой следующей ямы, когда снято столько доли кучи; ям не осталось раньше — на любой карте
+    JOKER_AT: 0.88,       //   радужный джокер — золотой следующей ямы, когда со счёта ушло столько доли кучи (осталось ~12%)
   },
   SEARCH: {              // «Иголка в стоге» (Андрей 30.10): в куче один золотой туз глубоко, играется вся куча, колода
                           // бесконечная, проигрыша нет; нашёл — куча в разы больше. Калибровка — `node sim.mjs search`
@@ -435,6 +435,7 @@ const CFG = {
     JOKER_WIN_MS: 2600,   //   радужный джокер взят: столько до отъезда к следующей куче…
     PILE_OUT_MS: 1700,    //   …камера отъезжает так, что рядом видна куча побольше…
     PILE_MOVE_MS: 1700,   //   …и переезжает к ней
+    PILE_GROW: 1.55,      //   следующая куча — тот же стог, показанный во столько раз крупнее (фейк «куча больше»)
     SHRINK_DOWN_MS: 1100, //   …затем нырок к следующему тузу (кривые нырка)
     TROPHY_FADE_AT: 1300, //   бесконечный: трофей с этого момента (от взятия) за TROPHY_FADE_MS уменьшается до 0,6 и гаснет
     TROPHY_FADE_MS: 300,  //   …
@@ -889,24 +890,21 @@ function plusFiveRigged(L, st, R){
 }
 // ================= бесконечный стог =================
 // Забег: свой живой стог (полный в начале), следующая золотая — рядом с прошлой, на ней 5–9 карт, яма из коридора.
-function endlessSpec(k){ const L = CFG.ENDLESS.PILES; return k < L.length ? L[k] : { ...L[L.length - 1], seed: L[L.length - 1].seed + 1000 * (k - L.length + 1) }; }
-const EPILES = {};
-function endlessPile(k){
-  const sp = endlessSpec(k), key = sp.N + ':' + sp.seed;
-  return EPILES[key] || (EPILES[key] = sp.N === CFG.PILE_N && sp.seed === CFG.PILE_SEED && sp.layers === CFG.PILE_LAYERS ? pile() : makePile(sp.seed, sp.N, sp.layers));
+function endlessSpec(k){ const L = CFG.ENDLESS.PILES, n = L.length - 1; return k <= n ? L[k] : { shown: Math.round(L[n].shown * 2.5 ** (k - n) / 1000) * 1000, jokerPits: L[n].jokerPits + 8 * (k - n) }; }
+function endlessPile(){ return pile(); }   // вид и граф — стог теста у всех куч
+// забег по куче k; alive и fake — из сейва (автосейв кучи), иначе куча целиком
+function endlessStart(seed, k, alive, fake){
+  const P = pile(), sp = endlessSpec(k || 0), a = alive || new Uint8Array(P.N).fill(1); let removed = 0; for (let i = 0; i < P.N; i++) removed += 1 - a[i];
+  return { seed, k: k || 0, P, alive: a, R: mulberry32(seed * 7919 + 101), aces: 0, removed, last: -1, pits: 0, joker: false, shown: sp.shown, fake: fake || 0 };
 }
-// забег по куче k; alive — сохранённое (автосейв кучи), иначе куча целиком
-function endlessStart(seed, k, alive){
-  const P = endlessPile(k || 0), a = alive || new Uint8Array(P.N).fill(1); let removed = 0; for (let i = 0; i < P.N; i++) removed += 1 - a[i];
-  return { seed, k: k || 0, P, alive: a, R: mulberry32(seed * 7919 + 101), aces: 0, removed, last: -1, pits: 0, joker: false };
-}
-// джокер пора: снято JOKER_AT кучи (снятое считается по живому стогу — и после продолжения из сейва)
-const jokerDue = (run) => !run.joker && run.removed >= CFG.ENDLESS.JOKER_AT * run.P.N;
+// сколько карт уходит со счёта кучи за яму, где снято n из L.n
+function endlessFake(run, L, n){ const sp = endlessSpec(run.k); return Math.round(sp.shown * CFG.ENDLESS.JOKER_AT / sp.jokerPits * (0.6 + 0.8 * n / Math.max(1, L.n))); }
+const jokerDue = (run) => !run.joker && run.fake >= CFG.ENDLESS.JOKER_AT * run.shown;
 function endlessNextPit(run){
-  const L = endlessFindPit(run, endlessSpec(run.k).lo, true);
+  const L = endlessFindPit(run, CFG.ENDLESS.lo, true);
   if (L){ L.joker = jokerDue(run); return L; }
   if (run.joker) return null;
-  const J = endlessFindPit(run, 1, false); if (J) J.joker = true;   // ям по правилам не осталось, а джокера ещё нет — он на любой карте
+  const J = endlessFindPit(run, 1, false); if (J) J.joker = true;   // ям по правилам не нашлось — джокер на любой карте
   return J;
 }
 function endlessFindPit(run, lo, corridor){
@@ -948,7 +946,8 @@ function endlessDeal(L, prev, R){
 // награда за туз: +GOLD_CARDS карт в колоду (из свежей колоды)
 function endlessReward(st, R){ const d = freshDeck(R); for (let i = 0; i < CFG.ENDLESS.GOLD_CARDS; i++) st.stock.push(d[i % 52]); }
 // после ямы: снятые карты убираются из живого стога забега
-function endlessCommit(run, L, st){ let n = 0; for (let q = 0; q < L.n; q++) if (!st.present[q]){ run.alive[L.nodes[q]] = 0; n++; } run.removed += n; run.pits++; return n; }
+function endlessCommit(run, L, st){ let n = 0; for (let q = 0; q < L.n; q++) if (!st.present[q]){ run.alive[L.nodes[q]] = 0; n++; } run.removed += n; run.pits++;
+  if (run.shown) run.fake = Math.min(run.shown, run.fake + endlessFake(run, L, n)); return n; }   // и со счёта кучи — фейковая доля
 // забег бота (сим): ямы подряд до тупика; на почти-победе — «+5 под игрока», пока есть p5. k — куча; untilJoker — куча
 // целиком до джокера: колода кончилась — куча ждёт, новая колода (как автосейв кучи у игрока); acts — ходы и доборы бота
 function endlessBotRun(seed, bot, p5, k, untilJoker){
@@ -1806,6 +1805,9 @@ function cardGeo(){
   return CARD_GEO = g;
 }
 // Куча в сцене: укладка по карте высот и один InstancedMesh на все карты; при смене кучи старый меш выбрасывается.
+// лица карт вне ямы по сиду (у куч бесконечного — свои: вид у всех один стог теста)
+const FACE_SEED = CFG.PILE_SEED * 31 + 3, pileFaceSeed = (k) => FACE_SEED + 1000 * k;
+function setFaces(seed){ const N = S.P.N, R = mulberry32(seed); S.face = new Int16Array(N); for (let i = 0; i < N; i++) S.face[i] = Math.floor(R() * 52); S.faceSeed = seed; }
 function setScenePile(P){
   if (S.P === P && S.mesh) return;
   if (S.mesh){ S.scene.remove(S.mesh); S.mesh.geometry.dispose(); S.mesh.dispose(); }
@@ -1831,7 +1833,7 @@ function setScenePile(P){
   // верхний луч кадра падает на землю ~400 за центром стога
   const gs = 2 * Math.max(P.rad * CFG.FX.GROUND_HALF_R, CFG.FX.GROUND_HALF_MIN); S.ground.scale.set(gs, 1, gs); S.groundMat.uniforms.uRad.value = P.rad;
   // лица карт вне ямы — свои, по сиду; «открыта на старте» — ничего не лежит в полной куче
-  const R = mulberry32(CFG.PILE_SEED * 31 + 3); S.face = new Int16Array(N); for (let i = 0; i < N; i++) S.face[i] = Math.floor(R() * 52);
+  setFaces(FACE_SEED);
   S.open0 = new Uint8Array(N); for (let i = 0; i < N; i++) S.open0[i] = P.above[i].length ? 0 : 1;
   log('event', 'scene.pile', (lc ? 'cached ' : '') + 'n=' + N);
 }
@@ -2063,7 +2065,7 @@ function placeCamera(t){
   const c = S.camera, cp = Math.cos(CAM.pitch);
   c.position.set(CAM.tx + CAM.dist * cp * Math.sin(CAM.yaw), CAM.ty + CAM.dist * Math.sin(CAM.pitch), CAM.tz + CAM.dist * cp * Math.cos(CAM.yaw));
   c.lookAt(CAM.tx, CAM.ty, CAM.tz);
-  S.ys = CAM.ys; S.mesh.scale.y = S.ys; S.shMesh.scale.y = S.ys; S.mesh.material.uniforms.uYS.value = S.ys; if (G.pileMove && G.pileMove.mesh) G.pileMove.mesh.scale.y = S.ys;
+  S.ys = CAM.ys; S.mesh.scale.y = S.ys; S.shMesh.scale.y = S.ys; S.mesh.material.uniforms.uYS.value = S.ys; if (G.pileMove && G.pileMove.mesh) G.pileMove.mesh.scale.y = S.ys * G.pileMove.grow;
   c.aspect = S.cssW / S.cssH;
   // тряска — только 3D-слой (сдвиг кадра): панель и 2D не трясутся; огибающая — нарастание до peak, затем спад к dur
   let sx = 0, sy = 0; const sh = G.shake;
@@ -2233,32 +2235,27 @@ function sparkFound(){
 function startEndless(){
   leaveMode('endless');
   const E = G.save.endless, sv = E.pile || { k: 0, removed: [] }, P = endlessPile(sv.k);
-  setScenePile(P); G.srch = null; setGoldSkin('gold');
+  setScenePile(P); setFaces(pileFaceSeed(sv.k)); G.srch = null; setGoldSkin('gold');
   G.mode = 'endless'; E.runs++;
   const alive = new Uint8Array(P.N).fill(1); for (const i of sv.removed || []) if (i >= 0 && i < P.N) alive[i] = 0;
-  G.run = endlessStart(E.runs, sv.k, alive); G.run.coins = 0; G.run.removed0 = G.run.removed; G.li = -1; G.attempt = 0; dropFx(); trayReset(); G.plus5Used = 0; G.offer = null;
+  G.run = endlessStart(E.runs, sv.k, alive, sv.fake || 0); G.run.coins = 0; G.run.fake0 = G.run.fake; G.li = -1; G.attempt = 0; dropFx(); trayReset(); G.plus5Used = 0; G.offer = null;
   G.st = sv.stock && sv.stock.length ? { top: sv.top, stock: sv.stock.slice(), streak: sv.streak || 0 } : null;   // колода из сейва: endlessDeal берёт top, stock, streak
   G.aliveNow = G.run.alive; G.lv = newLevelMetrics(-1);
-  goto('game'); log('event', 'endless.start', 'run=' + G.run.seed + ' pile=' + (sv.k + 1) + ' left=' + (P.N - G.run.removed) + ' deck=' + (G.st ? G.st.stock.length : 'new'));
+  goto('game'); log('event', 'endless.start', 'run=' + G.run.seed + ' pile=' + (sv.k + 1) + ' left=' + endlessLeft() + ' deck=' + (G.st ? G.st.stock.length : 'new'));
   endlessSave(); nextEndlessPit(true);
 }
-// куча побольше строится не мгновенно (3 000 карт — граф и укладка): экран загрузки, как у поиска
-function endlessSoon(){
-  if (G.busy) return;
-  const sv = G.save.endless.pile, sp = endlessSpec(sv ? sv.k : 0);
-  if (sp.N <= 1500 || (sp.N === CFG.PILE_N && sp.seed === CFG.PILE_SEED)) return startEndless();
-  G.busy = true; const el = $('loading'); el.textContent = 'Куча укладывается…'; el.className = 'busy'; log('event', 'endless.loading');
-  setTimeout(() => { try { startEndless(); } catch (err) { if (G.errors.length < 20) G.errors.push(String(err && err.stack || err)); console.error(err); }
-    finally { G.busy = false; el.className = 'hide'; } }, CFG.FX.LOAD_DEFER_MS);
-}
+// сколько карт в куче показываем (фейк: убыль за яму — endlessFake)
+function endlessLeft(){ const r = G.run; return r ? Math.max(0, r.shown - r.fake) : 0; }
+function endlessSoon(){ if (!G.busy) startEndless(); }   // вид у всех куч — стог теста, строить нечего
 // автосейв кучи (Андрей 01.11: «сейв в рамках кучи»): снятое (вместе с картами текущей ямы), колода, текущая и серия — после
 // каждой ямы, при уходе из режима и в фон; колода кончилась — колода не хранится (дальше — свежая)
 function endlessSave(deckOut){
   const r = G.run; if (G.mode !== 'endless' || !r || !r.P) return;
   const rem = []; for (let i = 0; i < r.P.N; i++) if (!r.alive[i]) rem.push(i);
-  if (G.L && G.st && G.st.present && !G.L.committed) for (let q = 0; q < G.L.n; q++) if (!G.st.present[q] && r.alive[G.L.nodes[q]]) rem.push(G.L.nodes[q]);
+  let fake = r.fake, n = 0;
+  if (G.L && G.st && G.st.present && !G.L.committed){ for (let q = 0; q < G.L.n; q++) if (!G.st.present[q] && r.alive[G.L.nodes[q]]){ rem.push(G.L.nodes[q]); n++; } if (n) fake = Math.min(r.shown, fake + endlessFake(r, G.L, n)); }
   const st = G.st, keep = !deckOut && st && st.stock && st.stock.length;
-  G.save.endless.pile = { k: r.k, removed: rem, stock: keep ? st.stock.slice() : null, top: keep ? st.top : -1, streak: keep ? st.streak || 0 : 0 };
+  G.save.endless.pile = { k: r.k, removed: rem, fake, stock: keep ? st.stock.slice() : null, top: keep ? st.top : -1, streak: keep ? st.streak || 0 : 0 };
   save();
 }
 function nextEndlessPit(first, ready){   // ready — яма, посчитанная заранее (endlessWin), null — ям больше нет
@@ -2269,7 +2266,7 @@ function nextEndlessPit(first, ready){   // ready — яма, посчитанн
   pickSparks(); clearAnims();
   log('event', 'endless.pit', 'n=' + (G.run.pits + 1) + ' pit=' + L.n + ' onAce=' + (L.goalN - 1) + ' deck=' + G.st.stock.length + (L.joker ? ' joker' : ''));
   if (first){                                   // первая яма кучи — общий план с табличкой кучи, искра, нырок
-    G.pitFrom = cardsLeft(); G.pileIntro = { t0: now(), k: G.run.k, N: P.N, left: cardsLeft() };
+    G.pitFrom = endlessLeft(); G.pileIntro = { t0: now(), k: G.run.k, N: G.run.shown, left: endlessLeft() };
     G.focus = { x: P.x[L.gold], z: P.y[L.gold] };   // дальше прожектор сам переезжает к следующему тузу (tick)
     G.pitOn = false; refreshData(); S.mesh.material.uniforms.uDim.value = 0;
     const h = overHome(-1, Math.atan2(P.x[L.gold], P.y[L.gold])); Object.assign(CAM, h); home = { ...h }; zoom = 1; camTw = null;
@@ -2278,7 +2275,7 @@ function nextEndlessPit(first, ready){   // ready — яма, посчитанн
   } else {                                      // дальше — короткий взгляд на весь стог (куча стала меньше), затем нырок к следующему тузу
     G.pitOn = false; refreshData(); G.phase = 'glide';
     if (G.preWinTop !== null){ ringPush(G.preWinTop); G.landAt = now(); G.landAmp = 1; landDust(G.landAt, (G.run.pits + 1) * 53 + G.preWinTop + 7); }   // на отбое — st.top (A♥) с посадкой и пылью, под ним карта, с которой взят туз
-    const FX = CFG.FX, t = now(), to = cardsLeft();
+    const FX = CFG.FX, t = now(), to = endlessLeft();
     G.shrink = { from: Math.max(to, G.pitFrom || to), to, t0: t, descAt: 0, down: 0 }; G.pitFrom = to;   // счётчик — сколько ушло за яму
     addFx({ kind: 'endless.shrink', t0: t, dur: FX.SHRINK_UP_MS + FX.SHRINK_HOLD_MS, info: G.shrink.from + '→' + to });
     Audio.rise(); Audio.shrink(FX.SHRINK_COUNT_AT / 1000);
@@ -2300,7 +2297,7 @@ function endlessDescend(){
 }
 // счётчик стога во взгляде между ямами: бежит от «было на старте ямы» к «осталось» (шапка уже показывает итог)
 function shrinkShown(t){
-  const Z = G.shrink; if (!Z) return cardsLeft();
+  const Z = G.shrink; if (!Z) return endlessLeft();
   const k = Math.max(0, Math.min(1, (t - Z.t0 - CFG.FX.SHRINK_COUNT_AT) / CFG.FX.SHRINK_COUNT_MS));
   return Math.round(Z.from - (Z.from - Z.to) * easeOutCubic(k));
 }
@@ -2315,7 +2312,7 @@ function pileScreen(){ const P = SP(), a = toScreen(new THREE.Vector3(0, S.maxH 
 // счётчик стога во взгляде между ямами: снятые за яму карты слетаются из стога в число (не больше SHRINK_FLY_N), число бежит
 // вниз и подпрыгивает, «−N карт» золотом, полоса «разобрано» растёт; следующая яма с джокером — радужная строка
 function drawShrink(c, t){
-  const Z = G.shrink, FX = CFG.FX, d = Z.from - Z.to, N = G.run && G.run.P ? G.run.P.N : Z.from, a = Math.min(1, (t - Z.t0) / 250) * (Z.down ? Math.max(0, 1 - (t - Z.down) / 300) : 1);
+  const Z = G.shrink, FX = CFG.FX, d = Z.from - Z.to, N = G.run ? G.run.shown : Z.from, a = Math.min(1, (t - Z.t0) / 250) * (Z.down ? Math.max(0, 1 - (t - Z.down) / 300) : 1);
   if (a <= 0) return;
   const k = (t - Z.t0 - FX.SHRINK_COUNT_AT) / FX.SHRINK_COUNT_MS, end = k - 1, pop = end >= 0 && end < 0.3 ? 1 + 0.16 * Math.sin(Math.PI * end / 0.3) : 1, y = H * 0.17;
   if (d > 0){ const m = Math.min(FX.SHRINK_FLY_N, d), pc = pileScreen();
@@ -2361,7 +2358,7 @@ function drawPileNext(c, t){
   const p = toScreen(new THREE.Vector3(M.off.x, M.maxH * S.ys * 1.25 + 1, M.off.z)), x = Math.max(70, Math.min(VW - 70, p.x / scale)), y = Math.max(110, p.y / scale - 20);
   c.save(); c.globalAlpha = Math.min(1, e / 400); c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
   outlined(c, 'КУЧА ' + (M.k + 1), x, y - 22, '900 15px ' + FONT, PAL.goldText, 5);
-  outlined(c, M.P.N.toLocaleString('ru-RU') + ' ' + plural(M.P.N, 'карта', 'карты', 'карт'), x, y, '900 22px ' + FONT, PAL.cream, 6);
+  const n2 = M.run.shown; outlined(c, n2.toLocaleString('ru-RU') + ' ' + plural(n2, 'карта', 'карты', 'карт'), x, y, '900 22px ' + FONT, PAL.cream, 6);
   c.restore();
 }
 // джокер взят: радужная надпись с подскоком и «куча N разобрана»
@@ -2405,33 +2402,35 @@ function endlessNextPile(){
   const r = G.run, E = G.save.endless, FX = CFG.FX, k = r.k + 1, st = G.st && G.st.stock ? G.st : null;
   E.piles = Math.max(E.piles || 0, k); E.pile = { k, removed: [], stock: st ? st.stock.slice() : null, top: st ? st.top : -1, streak: st ? st.streak || 0 : 0 }; save();
   G.phase = 'pile'; G.pitOn = false; refreshData(); tip(''); G.shrink = null;   // G.L — прошлая яма: панель остаётся до первой ямы новой кучи
-  const P1 = SP(), P2 = endlessPile(k), run2 = endlessStart(E.runs, k); run2.coins = r.coins; run2.aces = r.aces; run2.removed0 = 0;
+  const P1 = SP(), P2 = endlessPile(k), run2 = endlessStart(E.runs, k), G2 = FX.PILE_GROW; run2.coins = r.coins; run2.aces = r.aces; run2.fake0 = 0;
   const L2 = endlessNextPit(run2);
   placeCamera(now());
   const rv = new THREE.Vector3(1, 0, 0).applyQuaternion(S.camera.quaternion); rv.y = 0; if (rv.lengthSq() < 1e-6) rv.set(1, 0, 0); rv.normalize();
-  const gap = (P1.rad + P2.rad) * 1.3 + 3, off = { x: rv.x * gap, z: rv.z * gap }, pv = previewPile(P2, off);
-  G.pileMove = { P: P2, off, mesh: pv.mesh, maxH: pv.maxH, run: run2, L: L2, k, t0: now() };
+  // следующая куча — тот же стог, показанный в G2 раза крупнее: после переезда камера уменьшает кадр в G2 раз, картинка та же
+  const R2 = P2.rad * G2, gap = (P1.rad + R2) * 1.45 + 3, off = { x: rv.x * gap, z: rv.z * gap }, pv = previewPile(P2, off, G2, pileFaceSeed(k));
+  G.pileMove = { P: P2, off, mesh: pv.mesh, maxH: pv.maxH * G2, grow: G2, run: run2, L: L2, k, t0: now() };
   const yaw2 = L2 ? Math.atan2(P2.x[L2.gold], P2.y[L2.gold]) + 0.35 : CAM.yaw, to = overPose(P2, pv.maxH, yaw2);
-  to.tx += off.x; to.tz += off.z;
+  to.ty *= G2; to.dist *= G2; to.tx = off.x; to.tz = off.z;
   // обе кучи в кадре: от левого края текущей до правого края следующей, с запасом
-  const fovV = CFG.FOV * Math.PI / 180, fovH = 2 * Math.atan(Math.tan(fovV / 2) * S.cssW / S.cssH), cx = (gap + P2.rad - P1.rad) / 2, halfW = (gap + P1.rad + P2.rad) / 2 * 1.25;
-  const h1 = overPose(P1, S.maxH, CAM.yaw), both = { ...h1, tx: rv.x * cx, tz: rv.z * cx, ty: Math.max(h1.ty, to.ty), dist: Math.max(to.dist, halfW / Math.tan(fovH / 2) + P2.rad * 0.6) };
-  addFx({ kind: 'endless.pile', t0: now(), dur: FX.PILE_OUT_MS + FX.PILE_MOVE_MS, info: 'pile=' + (k + 1) + ' n=' + P2.N });
-  Audio.rise(); log('event', 'endless.pile', 'next=' + (k + 1) + ' n=' + P2.N);
+  const fovV = CFG.FOV * Math.PI / 180, fovH = 2 * Math.atan(Math.tan(fovV / 2) * S.cssW / S.cssH), cx = (gap + R2 - P1.rad) / 2, halfW = (gap + P1.rad + R2) / 2 * 1.25;
+  const h1 = overPose(P1, S.maxH, CAM.yaw), both = { ...h1, tx: rv.x * cx, tz: rv.z * cx, ty: Math.max(h1.ty, to.ty), dist: Math.max(to.dist, halfW / Math.tan(fovH / 2) + R2 * 0.6) };
+  addFx({ kind: 'endless.pile', t0: now(), dur: FX.PILE_OUT_MS + FX.PILE_MOVE_MS, info: 'pile=' + (k + 1) + ' shown=' + run2.shown });
+  Audio.rise(); log('event', 'endless.pile', 'next=' + (k + 1) + ' shown=' + run2.shown);
   tweenCam(both, FX.PILE_OUT_MS, 'pileout', () => { Audio.whoosh(); tweenCam(to, FX.PILE_MOVE_MS, 'pilemove', endlessPileSwap); });
 }
 // переезд доехал: следующая куча становится сценой (укладка уже в кэше), камера сдвигается на тот же вектор — кадр не дёргается
 function endlessPileSwap(){
   const M = G.pileMove; if (!M) return;
-  dropPreview(); setScenePile(M.P); setGoldSkin('gold');
-  CAM.tx -= M.off.x; CAM.tz -= M.off.z; if (home){ home.tx -= M.off.x; home.tz -= M.off.z; }
-  G.run = M.run; G.aliveNow = G.run.alive; G.pileMove = null; clearAnims();
+  dropPreview(); setScenePile(M.P); setFaces(pileFaceSeed(M.k)); setGoldSkin('gold');
+  const g = M.grow, sc = (o) => { if (!o) return; o.tx = (o.tx - M.off.x) / g; o.tz = (o.tz - M.off.z) / g; o.ty /= g; o.dist /= g; };
+  sc(CAM); sc(home);
+  G.run = M.run; G.aliveNow = G.run.alive; G.covDirty = true; G.pileMove = null; clearAnims();
   nextEndlessPit(true, M.L);
 }
 function dropPreview(){ const M = G.pileMove; if (M && M.mesh){ S.scene.remove(M.mesh); M.mesh.geometry.dispose(); M.mesh = null; } }
 // следующая куча рядом с текущей: укладка — сразу в кэш (после переезда setScenePile берёт её же), свой меш со сдвигом;
 // карты лицом по тому же сиду, что у сцены, без ямы; материал общий
-function previewPile(P, off){
+function previewPile(P, off, grow, faceSeed){
   let lc = S.layCache.get(P);
   if (!lc){
     const keep = { Y: S.Y, mats: S.mats, invs: S.invs, maxH: S.maxH, hf: S.hf, hfExt: S.hfExt, hfG: S.hfG, hill: S.hill };
@@ -2439,13 +2438,13 @@ function previewPile(P, off){
     Object.assign(S, keep); S.layCache.set(P, lc);
   }
   const N = P.N, base = cardGeo(), geo = new THREE.BufferGeometry(); geo.setIndex(base.index); for (const k of ['position', 'normal', 'uv']) geo.setAttribute(k, base.attributes[k]);
-  const ad = new Float32Array(N * 4), R = mulberry32(CFG.PILE_SEED * 31 + 3);
+  const ad = new Float32Array(N * 4), R = mulberry32(faceSeed);
   for (let i = 0; i < N; i++){ const id = Math.floor(R() * 52), cov = P.above[i].length, o = (N - 1 - i) * 4; ad[o] = id; ad[o + 1] = CELL_FAR0 + id; ad[o + 2] = cov ? Math.max(0.5, 0.86 - 0.06 * cov) : 1; ad[o + 3] = 0; }
   geo.setAttribute('aData', new THREE.InstancedBufferAttribute(ad, 4)); geo.setAttribute('aAnim', new THREE.InstancedBufferAttribute(new Float32Array(N * 2), 2));
   geo.setAttribute('aHill', new THREE.InstancedBufferAttribute(lc.hill, 3));
   const mesh = new THREE.InstancedMesh(geo, S.mat, N), m = new THREE.Matrix4(); mesh.frustumCulled = false;
   for (let i = 0; i < N; i++){ m.fromArray(lc.mats, i * 16); mesh.setMatrixAt(N - 1 - i, m); }
-  mesh.position.set(off.x, 0, off.z); mesh.instanceMatrix.needsUpdate = true; S.scene.add(mesh);
+  mesh.position.set(off.x, 0, off.z); mesh.scale.set(grow, grow * S.ys, grow); mesh.instanceMatrix.needsUpdate = true; S.scene.add(mesh);
   return { mesh, maxH: lc.maxH };
 }
 function endEndless(why){
@@ -2460,7 +2459,7 @@ function endEndless(why){
 function bankRun(why){ const r = G.run; if (G.mode !== 'endless' || !r || r.over) return; endlessSave(); dropPreview(); r.over = true; const E = G.save.endless; E.aces += r.aces; if (r.aces > E.best) E.best = r.aces; save(); log('event', 'endless.over', 'aces=' + r.aces + ' why=' + why); }
 // уход из текущего режима: забег засчитывается, победа в яме, взятая под меню, записывается
 // (тряска и подсказки прежней сцены не переходят в новую; новый режим ставит камеру сам — к общему плану до меню не возвращаемся)
-function leaveMode(why){ bankRun(why); G.shake = null; G.homeBeforeMenu = null; G.shrink = null; G.pileIntro = null; G.pileMove = null; setGoldSkin('gold'); tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
+function leaveMode(why){ bankRun(why); if (S.faceSeed !== FACE_SEED && S.P) setFaces(FACE_SEED); G.shake = null; G.homeBeforeMenu = null; G.shrink = null; G.pileIntro = null; G.pileMove = null; setGoldSkin('gold'); tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
 function goalTip(){ const og = G.goalShown === null ? Math.max(0, onGold(G.st)) : G.goalShown, j = G.L && G.L.joker; return og ? 'Сними с ' + (j ? 'джокера' : 'туза') + ' ещё ' + og + ' ' + plural(og, 'карту', 'карты', 'карт') : (j ? 'Джокер' : 'Туз') + ' открыт — возьми его с K или 2'; }
 function playNode(q, how){
   const L = G.L, st = G.st, i = L.nodes[q];
@@ -3363,10 +3362,10 @@ function goto(screen){
     const tile = (act, ico, name, sub) => `<button class="tile" data-act="${act}">${ICON[ico]}<b>${name}</b><small>${sub}</small>${warn}</button>`;
     const tPlay = tile('play', 'test', 'Тест', done ? 'пройден · заново' : 'яма ' + (lvl + 1) + ' из ' + N);
     const tSrch = tile('search', 'search', 'Иголка', 'куча ' + searchSpec(G.save.search.k).N.toLocaleString('ru-RU'));
-    const ep = G.save.endless.pile, ek = ep ? ep.k : 0, eN = endlessSpec(ek).N, eLeft = eN - (ep && ep.removed ? ep.removed.length : 0);
+    const ep = G.save.endless.pile, ek = ep ? ep.k : 0, eN = endlessSpec(ek).shown, eLeft = Math.max(0, eN - (ep && ep.fake || 0));
     const tEndl = tile('endless', 'endless', 'Бесконечный', 'куча ' + (ek + 1) + ' · ' + (eLeft < eN ? 'осталось ' + eLeft.toLocaleString('ru-RU') : eN.toLocaleString('ru-RU') + ' карт'));
     const top = M.pitLive ? main('resume', 'Продолжить яму ' + (G.li + 1)) + `<div class="tiles">${tSrch}${tEndl}</div>`
-      : M.runLive ? main('resume', 'Продолжить кучу ' + (G.run.k + 1) + ' · осталось ' + cardsLeft().toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tSrch}</div>`
+      : M.runLive ? main('resume', 'Продолжить кучу ' + (G.run.k + 1) + ' · осталось ' + endlessLeft().toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tSrch}</div>`
       : M.srchLive ? main('search', 'Продолжить поиск · куча ' + G.srch.P.N.toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tEndl}</div>`
       : main('play', done ? 'Тест заново' : 'Играть · яма ' + (lvl + 1) + ' из ' + N) + `<div class="tiles">${tSrch}${tEndl}</div>`;
     const link = (act, txt) => `<button data-act="${act}">${txt}</button>`;
@@ -3429,8 +3428,8 @@ function goto(screen){
   }
   if (screen === 'endless-over'){
     const r = G.run, E = G.save.endless, gain = r.coins || 0;
-    const got = r.removed - (r.removed0 || 0), left = r.P.N - r.removed;
-    show(`${trophyHtml(!r.aces)}<h2>${G.endlessRecord ? 'Новый рекорд!' : 'Колода кончилась'}</h2><p>Куча ${r.k + 1} ждёт: осталось ${left.toLocaleString('ru-RU')} из ${r.P.N.toLocaleString('ru-RU')}. За забег снято ${got} ${plural(got, 'карта', 'карты', 'карт')}</p>
+    const got = r.fake - (r.fake0 || 0), left = endlessLeft();
+    show(`${trophyHtml(!r.aces)}<h2>${G.endlessRecord ? 'Новый рекорд!' : 'Колода кончилась'}</h2><p>Куча ${r.k + 1} ждёт: осталось ${left.toLocaleString('ru-RU')} из ${r.shown.toLocaleString('ru-RU')}. За забег разобрано ${got.toLocaleString('ru-RU')} ${plural(got, 'карта', 'карты', 'карт')}</p>
       <div class="stats">${statHtml(r.aces, plural(r.aces, 'туз', 'туза', 'тузов'))}${statHtml(E.best, 'рекорд')}${statHtml('+' + gain, plural(gain, 'монета', 'монеты', 'монет'), `data-to="${gain}" data-pre="+" data-coin="1"`)}</div>
       <div class="row"><button class="btn primary" data-act="endless">Продолжить кучу</button><button class="btn" data-act="menu">Меню</button></div>`);
     finalOpen();
@@ -3542,7 +3541,7 @@ function hud(){
   if (G.mode === 'search' && G.srch){ const Z = G.srch; $('hud-title').textContent = 'Куча ' + (Z.k + 1) + ' · ' + Z.P.N.toLocaleString('ru-RU') + ' карт'; $('hud-sub').textContent = 'снято ' + Z.removed + ' ' + plural(Z.removed, 'карта', 'карты', 'карт'); $('mute-wave').style.display = G.save.muted ? 'none' : ''; $('mute-x').style.display = G.save.muted ? '' : 'none'; return; }
   const endless = G.mode === 'endless' && G.run;
   $('hud-title').textContent = endless ? 'Куча ' + (G.run.k + 1) : G.L && G.screen !== 'menu' ? 'Яма ' + (G.li + 1) + ' из ' + LEVELS.length : 'Стог';
-  if (G.aliveNow){ const n = cardsLeft(); $('hud-sub').textContent = endless ? 'осталось ' + n.toLocaleString('ru-RU') + ' из ' + G.run.P.N.toLocaleString('ru-RU') + ' · ' + G.run.aces + ' ' + plural(G.run.aces, 'туз', 'туза', 'тузов') : 'в стоге ' + n.toLocaleString('ru-RU') + ' ' + plural(n, 'карта', 'карты', 'карт'); }
+  if (G.aliveNow){ const n = cardsLeft(); $('hud-sub').textContent = endless ? endlessLeft().toLocaleString('ru-RU') + ' карт · ' + G.run.aces + ' ' + plural(G.run.aces, 'туз', 'туза', 'тузов') : 'в стоге ' + n.toLocaleString('ru-RU') + ' ' + plural(n, 'карта', 'карты', 'карт'); }
   $('mute-wave').style.display = G.save.muted ? 'none' : ''; $('mute-x').style.display = G.save.muted ? '' : 'none';
 }
 // ☰ только с игрового экрана: шапка лежит под оверлеем, «☰ закрывает меню» касанием не достать
@@ -3953,9 +3952,8 @@ window.STOG = {
   play(n){ startLevel((n || 1) - 1); return this.state(); },
   endless(){ G.save.seen.endless = 1; save(); startEndless(); return this.state(); },
   // куча k, снято frac (сверху вниз, только открытые) — проверить джокер и переезд, не разбирая кучу руками
-  endlessAt(k, frac){ leaveMode('debug'); G.run = null; const P = endlessPile(k), alive = new Uint8Array(P.N).fill(1), rem = [], n = Math.round((frac || 0) * P.N);
-    for (let i = P.N - 1; i >= 0 && rem.length < n; i--) if (isOpenInPile(P, alive, i)){ alive[i] = 0; rem.push(i); }
-    G.save.seen.endless = 1; G.save.endless.pile = { k, removed: rem, stock: null, top: -1, streak: 0 }; save(); startEndless(); return this.state(); },   // хуки — без интро (qa/shots.mjs снимает режимы после localStorage.clear)
+  endlessAt(k, frac){ leaveMode('debug'); G.run = null; G.save.seen.endless = 1;
+    G.save.endless.pile = { k, removed: [], fake: Math.round((frac || 0) * endlessSpec(k).shown), stock: null, top: -1, streak: 0 }; save(); startEndless(); return this.state(); },   // хуки — без интро (qa/shots.mjs снимает режимы после localStorage.clear)
   search(k){ G.save.seen.search = 1; save(); startSearch(k); return this.sstate(); },
   sstate(){ const Z = G.srch; return Z ? { pile: Z.k + 1, n: Z.P.N, removed: Z.removed, taps: Z.taps, onGold: Z.cover[Z.gold], found: Z.found, won: Z.won, sz: +G.sz.toFixed(2), pxu: Math.round(pxuNow()), heat: +heatNow(now()).toFixed(2), ms: Math.round(G.srchElapsed), phase: G.phase, screen: G.screen } : null; },
   sbot(){ const Z = G.srch; if (!Z || Z.won) return null; if (Z.found){ G.preWinTop = Z.top; searchTap(Z, Z.gold); searchWin(cardQuad(Z.gold)); return 'gold'; }
