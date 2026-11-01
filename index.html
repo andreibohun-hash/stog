@@ -103,7 +103,8 @@ button{font:inherit}
 .tile small{font-size:12px;font-weight:800;color:var(--muted);line-height:1.2}
 .tile small.warn{color:var(--lack);white-space:nowrap}   /* предупреждение в одну строку: плитка не растёт */
 .links{display:flex;justify-content:center;align-items:center;margin:4px 0 -8px;color:var(--muted)}
-.links button{min-height:44px;padding:0 8px;border:0;background:none;color:var(--muted);font-weight:800;font-size:14px;cursor:pointer;touch-action:manipulation}
+.links button{min-height:44px;padding:0 6px;border:0;background:none;color:var(--muted);font-weight:800;font-size:14px;cursor:pointer;touch-action:manipulation;white-space:nowrap}
+.links button.off{text-decoration:line-through;opacity:.6}
 /* лист «+5»: веер рубашек и причина рядом с заголовком — лист низкий, яма видна над ним */
 #overlay.sheet .card{padding:14px 16px 12px}
 #overlay.sheet .card h2{font-size:20px;line-height:1.15;margin:0 0 4px}
@@ -377,7 +378,8 @@ const CFG = {
     STREAK_LOST_STEP_MS: 30, // обрыв серии ≥ 3: сегменты гаснут справа налево с таким шагом…
     STREAK_LOST_MS: 160,  //   …каждый за столько (бледнеет и сужается до 0,7 высоты)
     STREAK_LABEL_MS: 160, //   подпись «серия N» при росте подскакивает 1,35 → 1 за столько
-    STREAK_HOT: 10,       //   серия больше этого — «жар отбоя»: тёплое свечение за отбоем растёт с серией (до 15)
+    STREAK_LEN: 7,        //   дорожка серии — столько сегментов (Андрей 01.11: было 10, «на 3 карты меньше»)
+    STREAK_HOT: 7,        //   серия больше этого (дорожка полная) — «жар отбоя»: тёплое свечение за отбоем растёт с серией (ещё 5 карт)
     GHOST_FLIP_MS: 140,   //   призраки ±1 переворачиваются на новый ранг за столько (ранг меняется на середине)…
     GHOST_LAG_MS: 40,     //   …правый — на столько позже левого
     DENY_HOP_MS: 120,     //   неверный ранг: призраки дважды подскакивают, каждый раз столько…
@@ -413,6 +415,11 @@ const CFG = {
     TROPHY_MS: 1000,      //   трофей: полёт туза из ямы в центр (дальше висит до конца фазы победы)
     TROPHY_BOB: 3,        //   …висит, покачиваясь на столько px
     ENDLESS_WIN_MS: 1600, //   бесконечный: от взятого туза до переезда (выплата рубашек в колоду успевает)
+    SHRINK_UP_MS: 800,    //   бесконечный, между ямами (Андрей 01.11: «показываем, что куча становится меньше»): камера поднимается на общий план…
+    SHRINK_HOLD_MS: 700,  //   …стоит столько, пока счётчик стога добегает…
+    SHRINK_COUNT_AT: 400, //   …счётчик стартует через столько от начала подъёма…
+    SHRINK_COUNT_MS: 800, //   …и бежит вниз за столько…
+    SHRINK_DOWN_MS: 1100, //   …затем нырок к следующему тузу (кривые нырка)
     TROPHY_FADE_AT: 1300, //   бесконечный: трофей с этого момента (от взятия) за TROPHY_FADE_MS уменьшается до 0,6 и гаснет
     TROPHY_FADE_MS: 300,  //   …
     PAYOUT_AT_MS: 300,    //   выплата бесконечного: первая рубашка вылетает из трофея через столько после взятия…
@@ -434,6 +441,10 @@ const CFG = {
     GOAL_BUMP_A: 0.14,    //   …на столько
     // звук, хаптика, прогрев и бюджет кадра (B8)
     VOICES: 24,           //   звуков одновременно не больше стольких: новый шумовой при переполнении пропускается, тональный звучит
+    RIFFLE_VOL: 0.28,     //   ход: шорох колоды (5–7 бумажных щелчков и воздух) вместо щелчка — громкость…
+    MUSIC_VOL: 0.6,       //   фоновая музыка (Андрей 01.11): шина музыки, пэд ~0,06 на выходе — тише звуков игры…
+    MUSIC_CHORD_S: 4.8,   //   …аккорд держится столько (Cmaj7 – Am7 – Fmaj7 – G6, по кругу)…
+    MUSIC_FADE_S: 0.6,    //   …вход и уход (звук выкл., вкладка в фоне) — постоянная времени
     REVERB_SEND: 0.14,    //   посыл колокольчиков и струн в реверб (IR из кода, 0,7 с); щелчки и шорохи сухие
     DUCK: 0.5,            //   аккорд победы: остальные звуки приседают до этой громкости (−6 дБ)…
     DUCK_MS: 600,         //   …на столько
@@ -1016,7 +1027,7 @@ const G = {
   aliveNow: null,          // Uint8Array: живые карты стога сейчас (без снятых в прошлых ямах и в текущей)
   pitOn: false,            // стиль ямы включён: закрытые рубашкой, остальной стог тусклый
   sparks: new Set(),       // узлы ямы с искрой-монетой
-  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, removed: {}, metrics: {}, plus5Free: {}, endless: { best: 0, runs: 0, aces: 0 }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} },
+  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, music: true, removed: {}, metrics: {}, plus5Free: {}, endless: { best: 0, runs: 0, aces: 0 }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} },
     seen: {} }, loadSave()),   // seen — разовые подсказки и интро режимов: endless, search, endlessAce, hold, cover1, dust, glint, zoom
   mode: 'campaign',       // campaign — 10 ям теста; endless — бесконечный стог; search — «Иголка в стоге»
   run: null,              // забег бесконечного стога (endlessStart): свой живой стог, тузы, снятые карты
@@ -1059,16 +1070,18 @@ const G = {
   final: null,             // финальный экран: { at, els, rays, coin } — лучи и набегающие цифры (finalTick)
   missTips: 0,             // подсказок «эта карта не в яме» за сессию
   srchNearAt: 0, pinchUsed: false,   // поиск: первое приближение (для подсказки про щипок) и был ли щипок
+  shrink: null, pitFrom: 0,          // бесконечный: взгляд на стог между ямами { from, to, t0, descAt, down }; карт в стоге на старте ямы
 };
 
 // ---------------------------------------------------------------------------
 // Звук: WebAudio-синтез без файлов (§8), ленивый старт по первому жесту; голоса из «Света в окнах».
 // Шины: fx (все звуки) → out (0,85) → компрессор → выход; аккорд победы — прямо в out, fx под ним приседает. Реверб (IR из кода) —
 // только у колокольчиков и струн. Шум — один буфер на 2 с: всплеск берёт кусок со случайного места. Разброс высоты и громкости —
-// свой ГСЧ mulberry32(777), игровые сиды не трогает. Звуков одновременно не больше CFG.FX.VOICES
+// свой ГСЧ mulberry32(777), игровые сиды не трогает. Звуков одновременно не больше CFG.FX.VOICES. Музыка — своя шина в out
+// (голосов не занимает), планировщик по часам AudioContext раз в 200 мс; вкладка в фоне или звук выкл. — шина гаснет, ноты не ставятся
 // ---------------------------------------------------------------------------
 const Audio = {
-  ac: null, out: null, fx: null, bus: null, send: null, noise: null, cache: {}, rnd: mulberry32(777), voices: 0, coinAt: -1e9,
+  ac: null, out: null, fx: null, bus: null, send: null, noise: null, cache: {}, rnd: mulberry32(777), voices: 0, coinAt: -1e9, mus: null,
   init(){
     if (this.ac){ if (this.ac.state === 'suspended') this.ac.resume(); return; }
     try {
@@ -1087,6 +1100,8 @@ const Audio = {
       // струны серии и победы — заранее, по две за раз между кадрами: первый ход не строит буфер
       const warm = [...this.SCALE.map(f => f * 2), ...this.WIN], step = () => { for (let k = 0; k < 2 && warm.length; k++) this.pluckBuf(warm.shift()); if (warm.length) setTimeout(step, 0); };
       setTimeout(step, 0);
+      for (let k = 0; k < 3; k++) this.riffleBuf(k);
+      this.musicStart();
     } catch (e) { this.ac = null; }
   },
   ok(){ return this.ac && !G.save.muted; },
@@ -1132,6 +1147,57 @@ const Audio = {
     g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + (o.att || 0.004)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     src.connect(f).connect(g).connect(this.bus); this.hold(src); src.start(t, this.rnd() * (2 - dur - 0.02)); src.stop(t + dur + 0.02);
   },
+  // шорох колоды: 5–7 бумажных щелчков (шум с быстрым спадом, без низа), к концу чуть реже, под ними мягкий воздух; три варианта
+  riffleBuf(k){
+    if (this.cache['r' + k]) return this.cache['r' + k];
+    const sr = this.ac.sampleRate, len = Math.floor(sr * 0.14), buf = this.ac.createBuffer(1, len, sr), d = buf.getChannelData(0), R = mulberry32(900 + k), n = 5 + k;
+    let t = 0.006;
+    for (let i = 0; i < n; i++){
+      const a = (1 - 0.55 * i / n) * (0.7 + 0.3 * R()), i0 = Math.floor(t * sr), m = Math.floor(sr * 0.006), tau = sr * (0.0007 + 0.0005 * R());
+      let lo = 0;
+      for (let j = 0; j < m && i0 + j < len; j++){ const x = (R() * 2 - 1) * Math.exp(-j / tau); lo += (x - lo) * 0.55; d[i0 + j] += (x - lo) * a; }
+      t += 0.011 + 0.006 * R() + 0.002 * i;
+    }
+    for (let j = 0; j < len; j++) d[j] += (R() * 2 - 1) * 0.06 * Math.sin(Math.PI * Math.min(1, j / len * 1.4)) ** 2;
+    return (this.cache['r' + k] = buf);
+  },
+  riffle(vol, at){
+    if (!this.ok() || this.voices >= CFG.FX.VOICES) return;
+    const ac = this.ac, t = ac.currentTime + (at || 0), src = ac.createBufferSource(), hp = ac.createBiquadFilter(), lp = ac.createBiquadFilter(), g = ac.createGain();
+    src.buffer = this.riffleBuf(Math.floor(this.rnd() * 3)); src.playbackRate.value = 0.92 + 0.16 * this.rnd();
+    hp.type = 'highpass'; hp.frequency.value = 700; lp.type = 'lowpass'; lp.frequency.value = 5200 + 1200 * this.rnd();
+    g.gain.value = vol * this.tv(); src.connect(hp).connect(lp).connect(g).connect(this.bus); this.hold(src); src.start(t);
+  },
+  // фоновая музыка: пэд из двух осцилляторов на ноту (синус + треугольник ±6 центов) за lowpass, тихий бас, 2–3 струны из нот аккорда
+  CHORDS: [[130.8, 164.8, 196.0, 246.9], [110.0, 130.8, 164.8, 196.0], [87.3, 110.0, 130.8, 164.8], [98.0, 123.5, 146.8, 164.8]],
+  musicStart(){
+    const ac = this.ac, bus = ac.createGain(), lp = ac.createBiquadFilter();
+    bus.gain.value = 0.0001; lp.type = 'lowpass'; lp.frequency.value = 1100; lp.Q.value = 0.5; lp.connect(bus); bus.connect(this.out);
+    this.mus = { bus, lp, next: 0, i: 0, on: false };
+    setInterval(() => this.musicTick(), 200);
+  },
+  musicTick(){
+    const m = this.mus, ac = this.ac, FX = CFG.FX, on = this.ok() && G.save.music !== false && !G.paused && ac.state === 'running';
+    if (on !== m.on){ m.on = on; m.bus.gain.setTargetAtTime(on ? FX.MUSIC_VOL : 0.0001, ac.currentTime, FX.MUSIC_FADE_S); if (on) m.next = ac.currentTime + 0.1; log('sound', on ? 'music.on' : 'music.off'); }
+    if (!on) return;
+    while (m.next < ac.currentTime + 0.6){ this.musicChord(m.i % this.CHORDS.length, m.next); m.i++; m.next += FX.MUSIC_CHORD_S; }
+  },
+  musicChord(k, t){
+    const ac = this.ac, m = this.mus, D = CFG.FX.MUSIC_CHORD_S, ch = this.CHORDS[k], end = t + D + 1.4;
+    const env = (g, v, att) => { g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(v, t + att); g.gain.setValueAtTime(v, t + D); g.gain.linearRampToValueAtTime(0, end); };
+    ch.forEach((f, j) => [['sine', 0], ['triangle', j % 2 ? 6 : -6]].forEach(([type, dt]) => {
+      const o = ac.createOscillator(), g = ac.createGain(); o.type = type; o.frequency.value = f; o.detune.value = dt;
+      env(g, type === 'sine' ? 0.016 : 0.009, 1.2); o.connect(g).connect(m.lp); o.start(t); o.stop(end + 0.05);
+    }));
+    const b = ac.createOscillator(), bg = ac.createGain(); b.type = 'sine'; b.frequency.value = ch[0] / 2; env(bg, 0.04, 0.3); b.connect(bg).connect(m.bus); b.start(t); b.stop(end + 0.05);
+    const R = mulberry32(31 * this.mus.i + 5), n = 2 + Math.floor(R() * 2);   // струны: свой ГСЧ по номеру аккорда — без влияния на звуки игры
+    for (let j = 0; j < n; j++){
+      const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain(), at = t + D * (0.15 + 0.8 * (j + R()) / n);
+      src.buffer = this.pluckBuf(ch[Math.floor(R() * 4)] * 4); f.type = 'lowpass'; f.frequency.value = 2200; g.gain.value = 0.05 + 0.03 * R();
+      src.connect(f).connect(g); g.connect(m.bus); g.connect(this.send); src.start(at);
+    }
+    log('sound', 'music.chord', 'k=' + k);
+  },
   tok(f0, f1, dur, vol, at){             // мягкий тональный «тук»: синус с падением высоты
     if (!this.ok()) return;
     const ac = this.ac, t = ac.currentTime + (at || 0), o = ac.createOscillator(), g = ac.createGain(), v = vol * this.tv();
@@ -1141,11 +1207,12 @@ const Audio = {
   },
   SCALE: [261.6, 293.7, 329.6, 392.0, 440.0, 523.3, 587.3, 659.3, 784.0, 880.0],   // мажорная пентатоника: серия идёт вверх
   WIN: [523.3, 659.3, 784.0, 1046.5],    // аккорд победы (струны — в прогреве)
-  // ход: щелчок и «тук», струна серии (с 11-го шага — верхняя нота и колокольчик), тембр светлеет с серией; рубежи 5/10/15 — арпеджио
+  // ход: шорох колоды (Андрей 01.11: «асмрней, как листание колоды»), струна серии (с 11-го шага — верхняя нота и колокольчик),
+  // тембр светлеет с серией; рубежи 5/10/15 — арпеджио
   play(streak){
     const s = Math.max(1, streak), top = this.SCALE.length;
-    this.burst({ dur: 0.022, vol: 0.16, type: 'highpass', f0: 3200, f1: 2200 }); this.tok(900, 620, 0.05, 0.05);
-    this.pluck(this.SCALE[Math.min(top, s) - 1] * 2, 0.3, 0, 1800 + 240 * Math.min(s, 12));
+    this.riffle(CFG.FX.RIFFLE_VOL);
+    this.pluck(this.SCALE[Math.min(top, s) - 1] * 2, 0.22, 0, 1800 + 240 * Math.min(s, 12));
     if (s > top) this.bell(2637, 0.035, 0.9);
     log('sound', 'play', 'streak=' + streak);
     if (streakMile(s)){ [0, 4, 7].forEach((d, i) => this.bell(1046.5 * 2 ** (d / 12), 0.06, 0.8, i * 0.06)); this.burst({ dur: 0.2, vol: 0.03, type: 'bandpass', f0: 800, f1: 3000, q: 1.2, att: 0.06 }); log('sound', 'milestone', 'streak=' + s); }
@@ -1186,11 +1253,15 @@ const Audio = {
   aceTake(){ this.burst({ dur: 0.015, vol: 0.2, type: 'highpass', f0: 4000 }); this.tok(60, 40, 0.15, 0.2); log('sound', 'ace.take'); },   // тап по тузу: щелчок и суб
   // аккорд победы через at (после стоп-кадра) — мимо шины fx, она на DUCK_MS приседает
   win(at){
-    if (this.ok()){ const g = this.fx.gain, t = this.ac.currentTime + at, FX = CFG.FX; g.setTargetAtTime(FX.DUCK, t, 0.02); g.setTargetAtTime(1, t + FX.DUCK_MS / 1000, 0.08); }
+    if (this.ok()){ const g = this.fx.gain, t = this.ac.currentTime + at, FX = CFG.FX; g.setTargetAtTime(FX.DUCK, t, 0.02); g.setTargetAtTime(1, t + FX.DUCK_MS / 1000, 0.08);
+      const m = this.mus; if (m && m.on){ m.bus.gain.setTargetAtTime(FX.MUSIC_VOL * FX.DUCK, t, 0.02); m.bus.gain.setTargetAtTime(FX.MUSIC_VOL, t + FX.DUCK_MS / 1000, 0.3); } }
     const b = this.bus; this.bus = this.out;
     this.WIN.forEach((f, i) => this.pluck(f, 0.26, at + i * 0.08)); this.bell(1568, 0.12, 1.6, at + 0.36); this.bell(2093, 0.08, 1.4, at + 0.5);
     this.bus = b; log('sound', 'win');
   },
+  rise(){ this.burst({ dur: 0.7, vol: 0.05, type: 'bandpass', q: 1.4, f0: 260, f1: 1300, att: 0.5 }); log('sound', 'rise'); },   // подъём на общий план между ямами
+  // счётчик стога бежит вниз: шорох колоды — четыре раза, тише и реже, в конце мягкий «тук»
+  shrink(at){ [0, 0.14, 0.3, 0.5].forEach((d, i) => this.riffle(CFG.FX.RIFFLE_VOL * (0.8 - 0.15 * i), at + d)); this.tok(150, 95, 0.12, 0.08, at + 0.8); log('sound', 'shrink'); },
   sigh(at){ this.burst({ dur: 0.9, vol: 0.08, type: 'lowpass', f0: 900, f1: 180, att: 0.3, at }); log('sound', 'sigh'); },   // выдох — вместе с волной по стогу
 };
 const streakMile = (s) => s > 0 && s % CFG.FX.STREAK_MILE === 0 && s <= 3 * CFG.FX.STREAK_MILE;   // рубеж серии 5 / 10 / 15 (как у дорожки)
@@ -2100,22 +2171,53 @@ function nextEndlessPit(first, ready){   // ready — яма, посчитанн
   pickSparks(); clearAnims();
   log('event', 'endless.pit', 'n=' + (G.run.pits + 1) + ' pit=' + L.n + ' onAce=' + (L.goalN - 1) + ' deck=' + G.st.stock.length);
   if (first){                                   // первая яма — как в тесте: общий план, искра, нырок
+    G.pitFrom = cardsLeft();
     G.focus = { x: P.x[L.gold], z: P.y[L.gold] };   // дальше прожектор сам переезжает к следующему тузу (tick)
     G.pitOn = false; refreshData(); S.mesh.material.uniforms.uDim.value = 0;
     const h = overHome(-1, Math.atan2(P.x[L.gold], P.y[L.gold])); Object.assign(CAM, h); home = { ...h }; zoom = 1; camTw = null;
     G.phase = 'over'; G.overAt = now(); G.phaseUntil = G.overAt + CFG.OVER_SHOW_MS;
     tip('За каждый туз +' + CFG.ENDLESS.GOLD_CARDS + ' карт в колоду', 0);
-  } else {                                      // дальше — камера переезжает по стогу к следующему тузу
-    G.pitOn = true; refreshData(); G.phase = 'glide';
+  } else {                                      // дальше — короткий взгляд на весь стог (куча стала меньше), затем нырок к следующему тузу
+    G.pitOn = false; refreshData(); G.phase = 'glide';
     if (G.preWinTop !== null){ ringPush(G.preWinTop); G.landAt = now(); G.landAmp = 1; landDust(G.landAt, (G.run.pits + 1) * 53 + G.preWinTop + 7); }   // на отбое — st.top (A♥) с посадкой и пылью, под ним карта, с которой взят туз
-    const ph = pitHome(L); S.mesh.material.uniforms.uFaceRot.value = ph.flip; S.faceRot = ph.flip; Audio.whoosh();
-    tweenCam(ph, 1400, 'glide', () => {
-      G.phase = 'play'; G.lastInput = now(); tip(goalTip(), 4000, 'goal');
-      addFx({ kind: 'goalfly', pose: quadPose(cardQuad(L.gold)), dur: 800 }); goalBump(now() + 800);
-      checkStuck();
-    });
+    const FX = CFG.FX, t = now(), to = cardsLeft();
+    G.shrink = { from: Math.max(to, G.pitFrom || to), to, t0: t, descAt: 0, down: 0 }; G.pitFrom = to;   // счётчик — сколько ушло за яму
+    addFx({ kind: 'endless.shrink', t0: t, dur: FX.SHRINK_UP_MS + FX.SHRINK_HOLD_MS, info: G.shrink.from + '→' + to });
+    Audio.rise(); Audio.shrink(FX.SHRINK_COUNT_AT / 1000);
+    tweenCam(overHome(-1, CAM.yaw - 0.35), FX.SHRINK_UP_MS, 'shrink', () => { if (G.shrink) G.shrink.descAt = now() + FX.SHRINK_HOLD_MS; });   // рыскание прежнее: подъём без поворота
   }
   hud();
+}
+// после взгляда на стог — нырок к яме: прожектор, лица карт к игроку, кривые первого нырка; подсказка цели и туз в табличку — на посадке
+function endlessDescend(){
+  const L = G.L, FX = CFG.FX; G.shrink.down = now(); G.pitOn = true; refreshData();
+  const ph = pitHome(L); S.mesh.material.uniforms.uFaceRot.value = ph.flip; S.faceRot = ph.flip; Audio.whoosh();
+  const dv = { dist: easeInOutQuint, ys: (q) => easeOutCubic(Math.min(1, q / FX.DIVE_YS_PART)),
+    pitch: (q) => easeInOutSine(Math.max(0, (q - FX.DIVE_PITCH_LAG) / (1 - FX.DIVE_PITCH_LAG))) };
+  tweenCam(ph, FX.SHRINK_DOWN_MS, 'descend', () => {
+    G.shrink = null; G.phase = 'play'; G.lastInput = now(); tip(goalTip(), 4000, 'goal'); buzz('diveEnd');
+    addFx({ kind: 'goalfly', pose: quadPose(cardQuad(L.gold)), dur: 800 }); goalBump(now() + 800);
+    checkStuck(); hud();
+  }, dv);
+}
+// счётчик стога во взгляде между ямами: бежит от «было на старте ямы» к «осталось» (шапка уже показывает итог)
+function shrinkShown(t){
+  const Z = G.shrink; if (!Z) return cardsLeft();
+  const k = Math.max(0, Math.min(1, (t - Z.t0 - CFG.FX.SHRINK_COUNT_AT) / CFG.FX.SHRINK_COUNT_MS));
+  return Math.round(Z.from - (Z.from - Z.to) * easeOutCubic(k));
+}
+// счётчик стога во взгляде между ямами: подпись, крупное число (бежит вниз), «−N карт» золотом; уходит с началом нырка
+function drawShrink(c, t){
+  const Z = G.shrink, FX = CFG.FX, d = Z.from - Z.to, a = Math.min(1, (t - Z.t0) / 250) * (Z.down ? Math.max(0, 1 - (t - Z.down) / 300) : 1);
+  if (a <= 0) return;
+  const k = (t - Z.t0 - FX.SHRINK_COUNT_AT) / FX.SHRINK_COUNT_MS, end = k - 1, pop = end >= 0 && end < 0.25 ? 1 + 0.12 * Math.sin(Math.PI * end / 0.25) : 1, y = H * 0.19;   // над вершиной стога
+  c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round'; c.strokeStyle = 'rgba(20,15,5,.75)';
+  c.font = '800 14px ' + FONT; c.lineWidth = 4; c.strokeText('в стоге осталось', VW / 2, y - 34); c.fillStyle = PAL.creamMuted; c.fillText('в стоге осталось', VW / 2, y - 34);
+  const txt = shrinkShown(t).toLocaleString('ru-RU');
+  c.save(); c.translate(VW / 2, y); c.scale(pop, pop); c.font = '900 46px ' + FONT; c.lineWidth = 7; c.strokeText(txt, 0, 0); c.fillStyle = PAL.cream; c.fillText(txt, 0, 0); c.restore();
+  if (d > 0 && k > 0){ const m = '−' + d.toLocaleString('ru-RU') + ' ' + plural(d, 'карта', 'карты', 'карт');
+    c.globalAlpha = a * Math.min(1, k * 3); c.font = '900 18px ' + FONT; c.lineWidth = 5; c.strokeText(m, VW / 2, y + 36); c.fillStyle = PAL.goldText; c.fillText(m, VW / 2, y + 36); }
+  c.restore();
 }
 function endlessWin(quad){
   const t = now(), E = CFG.ENDLESS, FX = CFG.FX; G.phase = 'won'; G.phaseUntil = t + FX.ENDLESS_WIN_MS; G.sighAt = t + 400; sighFrom(G.L.gold, G.sighAt); tip(''); pushToAce();
@@ -2146,7 +2248,7 @@ function endEndless(why){
 function bankRun(why){ const r = G.run; if (G.mode !== 'endless' || !r || r.over) return; r.over = true; const E = G.save.endless; E.aces += r.aces; if (r.aces > E.best) E.best = r.aces; save(); log('event', 'endless.over', 'aces=' + r.aces + ' why=' + why); }
 // уход из текущего режима: забег засчитывается, победа в яме, взятая под меню, записывается
 // (тряска и подсказки прежней сцены не переходят в новую; новый режим ставит камеру сам — к общему плану до меню не возвращаемся)
-function leaveMode(why){ bankRun(why); G.shake = null; G.homeBeforeMenu = null; tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
+function leaveMode(why){ bankRun(why); G.shake = null; G.homeBeforeMenu = null; G.shrink = null; tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
 function goalTip(){ const og = G.goalShown === null ? Math.max(0, onGold(G.st)) : G.goalShown; return og ? 'Сними с туза ещё ' + og + ' ' + plural(og, 'карту', 'карты', 'карт') : 'Туз открыт — возьми его с K или 2'; }
 function playNode(q, how){
   const L = G.L, st = G.st, i = L.nodes[q];
@@ -2490,37 +2592,37 @@ function goalWon(t){ G.goalQueue = []; if (G.goalShown){ G.goalShown = 0; G.goal
 function streakSeen(n, t){
   const FX = CFG.FX, s0 = G.streakShown, M = FX.STREAK_MILE;
   if (n > s0){ G.streakAt = t; addFx({ kind: 'streak.pop', t0: t, dur: Math.max(FX.STREAK_POP_MS, FX.STREAK_GLOW_MS, FX.STREAK_LABEL_MS), info: 'n=' + n });   // fx — только журнал: рисует drawTrack
-    if (Math.floor(Math.min(n, 3 * M) / M) > Math.floor(s0 / M)){ G.milestoneAt = t; addFx({ kind: 'streak.mile', t0: t, dur: (Math.min(10, n) - 1) * FX.STREAK_WAVE_MS + FX.STREAK_FLASH_MS, info: 'n=' + n }); } }
-  else if (n < s0 && !n && s0 >= 3){ const k = Math.min(10, s0); G.streakLost = { n: k, t0: t }; addFx({ kind: 'streak.lost', t0: t, dur: (k - 1) * FX.STREAK_LOST_STEP_MS + FX.STREAK_LOST_MS, info: 'n=' + s0 }); }
+    if (Math.floor(Math.min(n, 3 * M) / M) > Math.floor(s0 / M)){ G.milestoneAt = t; addFx({ kind: 'streak.mile', t0: t, dur: (Math.min(FX.STREAK_LEN, n) - 1) * FX.STREAK_WAVE_MS + FX.STREAK_FLASH_MS, info: 'n=' + n }); } }
+  else if (n < s0 && !n && s0 >= 3){ const k = Math.min(FX.STREAK_LEN, s0); G.streakLost = { n: k, t0: t }; addFx({ kind: 'streak.lost', t0: t, dur: (k - 1) * FX.STREAK_LOST_STEP_MS + FX.STREAK_LOST_MS, info: 'n=' + s0 }); }
   G.streakShown = n;
 }
 // неверный ранг: призраки дважды подскакивают (drawGhosts по G.denyAt); fx — только журнал
 function denyHop(){ G.denyAt = now(); addFx({ kind: 'denyhop', t0: G.denyAt, dur: 2 * CFG.FX.DENY_HOP_MS }); }
-// дорожка серии: 10 сегментов по центру над призраками; с 5-го (COIN_STREAK_FROM) в сегменте точка-монета
+// дорожка серии: STREAK_LEN сегментов по центру над призраками; с 5-го (COIN_STREAK_FROM) в сегменте точка-монета
 function drawTrack(c, n, top, t){
   streakSeen(n, t);
-  const FX = CFG.FX, W = 176, x0 = VW / 2 - W / 2, y = top + 12, sw = (W - 27) / 10, on = Math.min(10, n), lost = G.streakLost;
+  const FX = CFG.FX, SN = FX.STREAK_LEN, W = 176, x0 = VW / 2 - W / 2, y = top + 12, sw = (W - 3 * (SN - 1)) / SN, on = Math.min(SN, n), lost = G.streakLost;
   c.fillStyle = 'rgba(255,255,255,.08)'; rr(c, x0, y - 5, W, 10, 5); c.fill();
   const pop = (t - G.streakAt) / FX.STREAK_POP_MS, mile = t - G.milestoneAt;
-  for (let i = 0; i < 10; i++){
+  for (let i = 0; i < SN; i++){
     let a = 1, hk = 1;
     if (i >= on){                               // погасший: обрыв серии — справа налево, бледнеет и сужается
       if (!lost || i >= lost.n) continue;
       const k = (t - lost.t0 - (lost.n - 1 - i) * FX.STREAK_LOST_STEP_MS) / FX.STREAK_LOST_MS; if (k >= 1) continue;
       const kk = Math.max(0, k); a = 1 - kk; hk = 1 - 0.3 * kk;
-    } else if (i === on - 1 && n <= 10 && pop >= 0 && pop < 1) hk = 1.7 - 0.7 * easeOutBack(pop);   // новый сегмент выдвигается с пружинкой
-    const sx = x0 + i * (sw + 3), h = 10 * hk, rad = i === 0 ? [5, 2, 2, 5] : i === 9 ? [2, 5, 5, 2] : 2;
-    c.globalAlpha = a; c.fillStyle = i < 4 ? PAL.streak : i < 9 ? '#ffc24a' : PAL.warm; rr(c, sx, y - h / 2, sw, h, rad); c.fill();
+    } else if (i === on - 1 && n <= SN && pop >= 0 && pop < 1) hk = 1.7 - 0.7 * easeOutBack(pop);   // новый сегмент выдвигается с пружинкой
+    const sx = x0 + i * (sw + 3), h = 10 * hk, rad = i === 0 ? [5, 2, 2, 5] : i === SN - 1 ? [2, 5, 5, 2] : 2;
+    c.globalAlpha = a; c.fillStyle = i < 0.4 * SN ? PAL.streak : i < SN - 1 ? '#ffc24a' : PAL.warm; rr(c, sx, y - h / 2, sw, h, rad); c.fill();
     if (i >= CFG.COIN_STREAK_FROM - 1){ c.fillStyle = '#fff3c4'; c.beginPath(); c.arc(sx + sw / 2, y, 1.5, 0, Math.PI * 2); c.fill(); }
     const fq = (mile - i * FX.STREAK_WAVE_MS) / FX.STREAK_FLASH_MS;   // рубеж: горящие вспыхивают белым слева направо
     if (i < on && fq >= 0 && fq < 1){ c.fillStyle = 'rgba(255,255,255,' + (0.85 * Math.sin(Math.PI * fq)).toFixed(3) + ')'; rr(c, sx, y - h / 2, sw, h, rad); c.fill(); }
   }
   c.globalAlpha = 1;
   const gk = (t - G.streakAt) / FX.STREAK_GLOW_MS;
-  if (on && n <= 10 && gk >= 0 && gk < 1) glow(c, GLOW.warm, x0 + (on - 1) * (sw + 3) + sw / 2, y, 6 + 10 * gk, 0.8 * (1 - gk));
+  if (on && n <= SN && gk >= 0 && gk < 1) glow(c, GLOW.warm, x0 + (on - 1) * (sw + 3) + sw / 2, y, 6 + 10 * gk, 0.8 * (1 - gk));
 }
-// «жар отбоя»: серия больше STREAK_HOT — дорожка горит целиком, за отбоем тёплое свечение растёт с серией (до 15)
-function discardHeat(c, g, n){ if (n <= CFG.FX.STREAK_HOT) return; const m = Math.min(n, 15), R = 6 + 1.6 * m; glow(c, GLOW.warm, g.x, g.y, g.w / 2 + R, 0.15 + 0.03 * m, g.h / 2 + R); }
+// «жар отбоя»: серия больше STREAK_HOT — дорожка горит целиком, за отбоем тёплое свечение растёт с серией (ещё 5 карт)
+function discardHeat(c, g, n){ if (n <= CFG.FX.STREAK_HOT) return; const m = 10 + Math.min(5, n - CFG.FX.STREAK_HOT), R = 6 + 1.6 * m; glow(c, GLOW.warm, g.x, g.y, g.w / 2 + R, 0.15 + 0.03 * m, g.h / 2 + R); }   // сила 11…15 — как у прежних серий 11…15
 // подпись серии — слева от левого призрака, на его середине (не задевает ни призраков, ни колоду); при росте подскакивает
 function drawStreakLabel(c, streak, g, gy, t){
   if (streak < 3) return;
@@ -2908,6 +3010,7 @@ function renderUI(t){
   if (G.trayK > 0.01 && ((G.L && G.st) || (G.mode === 'search' && G.srch))) drawTray(c, t);
   drawFx(c, t);
   drawParticles(c, t);
+  if (G.shrink) drawShrink(c, t);
   const h = hintTarget(t); if (h) drawHand(c, h.x, h.y, t);
   if (down && !down.moved && down.hold >= 0 && !down.loupe){       // кольцо лупы вокруг пальца
     const ms = t - down.t0; if (ms > CFG.LOUPE_RING_MS){ const k = Math.min(1, (ms - CFG.LOUPE_RING_MS) / (CFG.LOUPE_MS - CFG.LOUPE_RING_MS));
@@ -3033,6 +3136,7 @@ function goto(screen){
   if (screen === 'game'){
     hideCard();
     // вернулся из меню или справки — фаза ждёт ещё RESUME_MS: видно, где остановился, прежде чем всплывёт «+5» или экран туза
+    if ((G.prevScreen === 'menu' || G.prevScreen === 'help') && G.shrink && G.shrink.descAt && !G.shrink.down) G.shrink.descAt = Math.max(G.shrink.descAt, now() + CFG.FX.RESUME_MS);
     if ((G.prevScreen === 'menu' || G.prevScreen === 'help') && ['stuck', 'won', 'slide', 'over'].includes(G.phase)){ G.phaseUntil = Math.max(G.phaseUntil, now() + CFG.FX.RESUME_MS);
       // победа: трофей висит и эти RESUME_MS (fx отыграл бы под меню — яма без туза), карточка победы садится из него (FLIP)
       if (G.phase === 'won'){ for (const f of G.fx) if (f.kind === 'goldfly') f.dur = Math.max(f.dur, G.phaseUntil - f.t0); if (G.goldRect) G.goldRect.at = Math.max(G.goldRect.at, now()); } }
@@ -3052,7 +3156,7 @@ function goto(screen){
       : main('play', done ? 'Тест заново' : 'Играть · яма ' + (lvl + 1) + ' из ' + N) + `<div class="tiles">${tSrch}${tEndl}</div>`;
     const link = (act, txt) => `<button data-act="${act}">${txt}</button>`;
     show(`<p>Найди золотой туз в стоге из 10 000 карт</p>${top}
-      <div class="links">${link('results', 'Итоги теста')}·${link('help', 'Как играть')}${G.save.level ? '·' + link('restart', 'Сначала') : ''}</div>`, 'sheet menu');
+      <div class="links">${link('results', 'Итоги теста')}·${link('help', 'Как играть')}·<button data-act="music"${G.save.music !== false ? '' : ' class="off"'} aria-pressed="${G.save.music !== false}">Музыка</button>${G.save.level ? '·' + link('restart', 'Сначала') : ''}</div>`, 'sheet menu');
     paintLogo(); menuView();
     // с общего плана камера отъезжает (стог целиком над листом); обратно — menuCamBack при выходе в общий план
     if (home && home.kind === 'over' && !camTw && !G.homeBeforeMenu){ G.homeBeforeMenu = { ...home }; tweenCam({ ...home, yaw: CAM.yaw, dist: home.dist * CFG.FX.MENU_DIST }, CFG.FX.MENU_CAM_MS, 'menu'); }
@@ -3148,6 +3252,7 @@ $('card').addEventListener('click', (e) => {
   else if (act === 'search-go'){ G.save.seen.search = 1; save(); searchSoon(); }
   else if (act === 'search-next') searchSoon(G.save.search.k);
   else if (act === 'help') goto('help');
+  else if (act === 'music'){ G.save.music = G.save.music === false; save(); Audio.init(); b.classList.toggle('off', !G.save.music); b.setAttribute('aria-pressed', G.save.music); }   // музыка — в планировщике (Audio.musicTick)
   else if (act === 'results') goto('results');
   else if (act === 'menu') goto('menu');
   else if (act === 'resume'){ goto(G.phase === 'offer' ? 'offer' : 'game'); }
@@ -3167,7 +3272,7 @@ function resetProgress(){
   if (G.mode !== 'campaign'){ if (G.mode === 'search') searchSave(true); G.mode = 'campaign'; G.srch = null; G.run = null; setScenePile(pile()); }
   if (Object.keys(G.save.metrics).length) G.save.metricsPrev = G.save.metrics;   // прежние итоги не теряются совсем
   G.save.level = 0; G.save.removed = {}; G.save.metrics = {}; G.save.coins = CFG.COINS_START; G.coinsShown = G.save.coins; save();
-  G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; G.phase = 'idle'; dropFx(); G.offer = null; tip('');
+  G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; G.phase = 'idle'; dropFx(); G.offer = null; G.shrink = null; tip('');
   G.aliveNow = aliveFromSave(); clearAnims(); refreshData(); const U = S.mesh.material.uniforms; U.uDim.value = 0; U.uFaceRot.value = 0; S.faceRot = 0;
   const h = overHome(0); Object.assign(CAM, h); home = { ...h }; camTw = null; spin = null; zoom = 1; hud();
   log('event', 'reset');
@@ -3564,6 +3669,7 @@ function tick(t, fromRaf){
     if (G.phase === 'won' && t >= G.phaseUntil && G.mode === 'search'){ G.phase = 'idle'; dropFx(); goto('search-win'); }   // на search-win эффекты поля не рисуются
     if (G.phase === 'won' && t >= G.phaseUntil){ if (G.mode === 'endless') nextEndlessPit(false, G.nextL); else { G.phase = 'idle'; finishLevel(); } }   // следующая яма забега посчитана при взятии туза
     if (G.phase === 'over' && t >= G.phaseUntil) sparkFound();   // общий план показан — ныряем сами
+    if (G.shrink && G.shrink.descAt && !G.shrink.down && t >= G.shrink.descAt) endlessDescend();   // счётчик добежал — нырок к следующей яме
   }
   if (down && !down.moved && down.hold >= 0 && !down.loupe && t - down.t0 >= CFG.LOUPE_MS){ down.loupe = true; showLoupe(down.hold, down); }
   if (G.tipUntil && t > G.tipUntil){ const b = G.tipBack; G.tipBack = null; G.tipKind = ''; G.tipUntil = 0;   // разовая отыграла — под ней была своя
@@ -3680,7 +3786,7 @@ window.STOG = {
   // видимость открытых карт ямы: центр на экране, что лежит под центром (карта стога), видна ли рука-цель
   vis(){ if (!G.L) return null; return openNodes().map(q => { const i = G.L.nodes[q], c = cardCenter(i), hit = pickCard(c.x, c.y);
     return { q, rank: RANKS[rk(G.st.tab[q])], fit: ok(rk(G.st.top), rk(G.st.tab[q])), x: Math.round(c.x), y: Math.round(c.y), self: i, hit, hitNode: hit >= 0 ? G.nodeOf[hit] : -1, visible: nodeVisible(q) }; }); },
-  settle(){ if (camTw){ Object.assign(CAM, camTw.b); const d = camTw.done; camTw = null; log('fx.end', 'cam.settle'); if (d) d(); } G.phaseUntil = Math.min(G.phaseUntil, now()); safeTick(now(), false); placeCamera(now()); return this.state(); },   // для тестов: довести камеру и таймеры фаз
+  settle(){ if (camTw){ Object.assign(CAM, camTw.b); const d = camTw.done; camTw = null; log('fx.end', 'cam.settle'); if (d) d(); } G.phaseUntil = Math.min(G.phaseUntil, now()); if (G.shrink && !G.shrink.down) G.shrink.descAt = now(); safeTick(now(), false); placeCamera(now()); return this.state(); },   // для тестов: довести камеру и таймеры фаз
   speed(x){ G.timeScale = x || 1; return G.timeScale; },
   reset(){ try { localStorage.removeItem(SAVE_KEY); } catch (e) {} location.reload(); },
 };
