@@ -166,7 +166,7 @@ table.res tr.tot td{border-bottom:0;color:var(--accent)}
   <div id="tip"></div>
   <div id="loupe"><canvas id="loupe-cv" width="144" height="202"></canvas><small id="loupe-txt"></small></div>
   <div id="loading">Стог укладывается…</div>
-  <div id="overlay"><div id="logo"><b>СТ<canvas id="logo-ace" width="60" height="84"></canvas>Г</b><small>10 000 карт · 1 золотой туз</small></div><div class="card" id="card"></div></div>
+  <div id="overlay"><div id="logo"><b>СТ<canvas id="logo-ace" width="60" height="84"></canvas>Г</b><small>10 000 карт · 1 радужный джокер</small></div><div class="card" id="card"></div></div>
   <div id="toast" class="hide"></div>
 </div>
 <!-- three.js 0.185.1, вендорен файлом (CJS-сборка + шим exports → window.THREE). CDN не используется. -->
@@ -209,9 +209,12 @@ const CFG = {
     DRAW: [0.8, 0.15],    //   добор: верхняя карта колоды ни к чему не подходит — с такой вероятностью (1-я / 2-я половина)
                           //   на её место встаёт подходящая из глубины колоды
     FLIP: [0.8, 0.15],    //   снятие: хода не осталось, а открылась карта — с такой вероятностью она продолжает серию
+    EARLY: { levels: 3, DRAW: [1, 0.5], FLIP: [1, 0.5] },   // ямы 2–4 (Андрей 01.11: «первые ямы — винрейт повыше») — помощь сильнее
   },
-  START_MOVE: true,       // на старте раздачи есть ход без колоды: стартовая меняется местами с первой подходящей из колоды
-                          // (Андрей 30.10; набор карт тот же, иначе ~30% раздач начинались с добора)
+  MODES: { campaign: false, search: false },   // Андрей 01.11: «бесконечный — основной режим, в UI других нет, просто старт»; тест и поиск — для сима и тестов
+  START_MOVE: true,       // на старте раздачи есть ход без колоды (Андрей 30.10; набор карт тот же, иначе ~30% раздач начинались с добора)…
+  START_CHAIN: 3,         // …и не один, а серия из стольких карт подряд (Андрей 01.11: «на старте ямы чтобы были ходы, желательно несколько»)…
+  START_OPTIONS: 2,       // …и с первого хода на выбор не меньше стольких подходящих карт
   NEAR: 3,                // «+5» предлагается, если на тузе осталось ≤ стольких карт (туз не считается)
   PLUS5_N: 5,             // карт в «ещё горсти»
   PLUS5_TRIES: 60,        // наборов перебирает «+5 под игрока» (первая подходящая 2-й или 3-й, жадный доигрывает)
@@ -220,12 +223,20 @@ const CFG = {
   ENDLESS: {              // бесконечный стог (Андрей 30.10): яма за ямой по живому стогу, колода и серия переносятся
     R: 2, lo: 5, hi: 9,   //   яма — как обычная: радиус 2, на тузе 5–9 карт
     START_D: 20,          //   колода на старте забега
-    GOLD_CARDS: 16,       //   +карт в колоду за каждый взятый туз (`node sim.mjs endless`: жадный и «тёплая» — медиана 5 тузов,
-                          //   10–90% 1–31; «не думая» — медиана 1; +12 — всего 3, +18 — сильный бот почти не проигрывает)
+    GOLD_CARDS: 9,        //   +карт в колоду за каждый взятый туз. Было 16 → 12 (серия на старте) → 9: с помощью в тупике на всех ямах
+                          //   (ASSIST) +12 давал жадному 200 тузов за забег. +9: не думая 5,3 / тёплая 16 / жадный 14,1 (медиана 5 / 12 / 12)
     NEXT_MIN: 3, NEXT_MAX: 9,   // следующий туз — на таком расстоянии от прошлого (высот карты): камера переезжает рядом
     CHECK_N: 40,          //   партий жадного на проверку ямы-кандидата
     CORRIDOR: [40, 80],   //   ямы, где жадный с колодой 16 (как в обычной яме) выигрывает реже или чаще, пропускаются
     TRIES: 60,            //   кандидатов в золотые на один поиск
+    // первые ямы забега и каждой новой кучи (Андрей 01.11: «для первых ям поднять винрейт»): яма из коридора полегче и помощь в
+    // тупике, как в уровнях теста (обмен с неизвестными картами). Только первые EASY_PITS — иначе забег стал бы беспроигрышным
+    // Андрей 01.11: «помогать можно — заменив одну из перевёрнутых, ещё не открытых карт на нужную, и в колоду подтасовать нужную»:
+    // помощь в тупике (как ASSIST уровней теста) — на всех ямах забега, на первых сильнее; первая яма самого первого забега — урок
+    EASY_PITS: 3,         //   урок (если он есть) и следующие ямы — «первые»
+    EASY_CORRIDOR: [65, 95],
+    ASSIST: { on: true, HALF: 0.5, DRAW: [0.5, 0.15], FLIP: [0.5, 0.15] },
+    EASY_ASSIST: { on: true, HALF: 0.5, DRAW: [0.9, 0.5], FLIP: [0.9, 0.5] },
     // кучи (Андрей 01.11): у каждой цель — радужный джокер почти в самом конце; нашёл — рядом куча заметно больше, на ней дальше.
     // Вид — всегда стог теста (Андрей: «смотреться как в прошлой версии, пусть даже фейк»), карт в куче и их убыль — фейк:
     // shown — сколько карт показываем, jokerPits — за сколько ям в среднем доходим до джокера; дальше — ×2,5 и +8 ям.
@@ -276,7 +287,7 @@ const CFG = {
   PIT_PITCH_SPAN: 0.16,   // и по наклону
   OVER_PITCH: 0.62,       // наклон камеры на общем плане, рад
   OVER_YSCALE: 2.6,       // на общем плане стог вытянут по высоте во столько раз — силуэт стога
-  PIT_YSCALE: 0.15,       // в яме высоты сплющены: при утрированной толщине слоя карта на 10–16 слоёв выше съезжала под 55°
+  PIT_YSCALE: 0.25,       // в яме высоты сплющены: при утрированной толщине слоя карта на 10–16 слоёв выше съезжала под 55° (Андрей 01.11 — объём: 0,15 → 0,25, кадры 0,15/0,25/0,35 без съезда)
                           // почти на свою высоту, и то, что лежит на карте, на экране висело рядом (туз ямы 4, 30.10)
   ZOOM_MIN: 0.7,          // щипок: множитель расстояния
   ZOOM_MAX: 1.6,
@@ -360,7 +371,11 @@ const CFG = {
     GROUND_SH_OFF: 1.15,  //   тень стога на земле: центр сдвинут вправо-вниз по экрану на столько радиусов кучи (хвост выходит из-под основания)
     CAM_FAR: 1000,        //   дальняя плоскость камеры: тот же верхний луч доходит до земли в ~580 от камеры
     OVER_PITCH_MIN: 0.5,  //   нижний предел наклона на общем плане, рад: ниже в кадр попадает горизонт за краем земли
-    DIVE_YS_PART: 0.7,    //   нырок: стог сплющивается (ys → PIT_YSCALE) к этой доле времени — раньше, чем прилетает камера
+    YS_HOLD: 1.0,         //   высота стога на подлёте (Андрей 01.11: «пусть как можно позже переходит в 2д»): из силуэта общего плана — к естественной…
+    YS_DROP_TO: 0.35,     //   …за эту долю нырка, держится, пока камера летит…
+    YS_FLAT_AT: 0.78,     //   …и плющится к яме (PIT_YSCALE) только после этой доли; отъезд — зеркально
+    SEARCH_YS_FLAT: 0.08, //   поиск: куча плоская только при зуме ближе этого (0 — карта ~72 px, 1 — вся куча)…
+    SEARCH_YS_HOLD: 0.3,  //   …с этого зума и дальше — естественная высота и выше
     DIVE_PITCH_LAG: 0.1,  //   наклон начинает меняться после этой доли нырка
     DIVE_SETTLE: 0.035,   //   докатывание: в последние 20% нырка расстояние проседает на столько и возвращается
     DIVE_TRAY: 0.55,      //   панель выезжает с этой доли нырка…
@@ -706,8 +721,49 @@ function chainDeal(L){
   return st;
 }
 function dealSeed(li, attempt){ return 1000 * (li + 1) + 7919 * attempt + 17; }
-// Ход на старте: если стартовая ни к чему не подходит, она меняется местами с первой картой колоды (или остатка шуза),
-// которая подходит к открытой карте ямы. Ранги те же, что раздала колода, меняется только порядок.
+// Старт ямы — серия (CFG.START_CHAIN): с первых ходов без колоды идут несколько карт подряд. Стартовая (текущая) не меняется —
+// в бесконечном её уже видели на отбое. Шаг за шагом по открытым и открывающимся картам: подходящая есть — берётся (из
+// нескольких — та, после которой есть продолжение), нет — ранг открытой карты (в первую очередь той, что держит другие)
+// меняется местами с неизвестной подходящей: из остатка шуза, из глубины колоды или с закрытой карты ямы. Туз ямы не трогается,
+// карты, уже вошедшие в серию, — тоже; набор карт тот же.
+function ensureStartChain(L, st, want){
+  const pres = st.present.slice(), cov = st.cover.slice(), used = new Set(), gi = L.goldIdx;
+  const open = () => { const e = []; for (let q = 0; q < L.n; q++) if (pres[q] && !cov[q] && q !== gi) e.push(q); return e; };
+  const take = (q) => { pres[q] = 0; for (const x of L.covers[q]) cov[x]--; };
+  const give = (q, cur) => {   // ранг q ← подходящая к cur неизвестная карта; true — получилось
+    const fit = (v) => ok(rk(cur), rk(v));
+    let i = st.rest.findIndex(fit), arr = st.rest;
+    if (i < 0){ for (let j = st.stock.length - 1; j >= 1; j--) if (fit(st.stock[j])){ i = j; break; } arr = st.stock; }
+    const old = st.tab[q];
+    if (i >= 0){ st.tab[q] = arr[i]; arr[i] = old; }
+    else { let y = -1; for (let x = 0; x < L.n; x++) if (x !== gi && x !== q && !used.has(x) && pres[x] && cov[x] > 0 && st.cover[x] > 0 && fit(st.tab[x])){ y = x; break; }
+      if (y < 0) return false; st.tab[q] = st.tab[y]; st.tab[y] = old; }
+    if (st.cover[q] === 0){ st.known[rk(old)]--; st.known[rk(st.tab[q])]++; }   // открыта с раздачи — ранг на виду
+    return true;
+  };
+  let cur = st.top;
+  for (let k = 0; k < want; k++){
+    const ex = open().filter(q => !used.has(q)); if (!ex.length) break;
+    let fit = ex.filter(q => ok(rk(cur), rk(st.tab[q])));
+    if (!fit.length){
+      const byHold = ex.slice().sort((a, b) => L.covers[b].length - L.covers[a].length);
+      const q = byHold.find(x => give(x, cur)); if (q === undefined) break; fit = [q];
+    }
+    let pick = fit[0];
+    if (fit.length > 1 && k < want - 1) for (const f of fit){   // из нескольких — та, после которой продолжение уже есть
+      const p2 = pres.slice(), c2 = cov.slice(); pres[f] = 0; for (const x of L.covers[f]) cov[x]--;
+      const cont = open().some(q => q !== f && ok(rk(st.tab[f]), rk(st.tab[q])));
+      pres.set(p2); cov.set(c2); if (cont){ pick = f; break; }
+    }
+    used.add(pick); take(pick); cur = st.tab[pick];
+  }
+  // выбор с первого хода: подходящих к стартовой меньше START_OPTIONS — ещё одна открытая (не из серии) получает подходящий ранг
+  const first = exposed(L, st).filter(q => q !== gi);
+  let have = first.filter(q => ok(rk(st.top), rk(st.tab[q]))).length;
+  for (const q of first){ if (have >= CFG.START_OPTIONS) break; if (used.has(q) || ok(rk(st.top), rk(st.tab[q]))) continue; if (give(q, st.top)) have++; }
+  return st;
+}
+// старое правило (один ход, стартовая меняется с первой подходящей из колоды) — запасное, если серию собрать не из чего
 function ensureStartMove(L, st){
   if (playable(L, st).length) return st;
   const ex = exposed(L, st).filter(q => q !== L.goldIdx);
@@ -720,15 +776,17 @@ function ensureStartMove(L, st){
   }
   return st;
 }
+const startDeal = (L, st) => CFG.START_MOVE ? ensureStartMove(L, ensureStartChain(L, st, CFG.START_CHAIN)) : st;
 function newDeal(li, attempt){
   const L = levelPit(li);
   if (LEVELS[li].kind === 'tiny') return chainDeal(L);
   const st = deal(L, L.D, mulberry32(dealSeed(li, attempt || 0)));
-  if (CFG.ASSIST.on) st.rig = { R: mulberry32(dealSeed(li, attempt || 0) * 3 + 11), draws: 0, flips: 0 };   // помощь (см. CFG.ASSIST)
-  return CFG.START_MOVE ? ensureStartMove(L, st) : st;
+  const A = CFG.ASSIST, early = li <= A.EARLY.levels ? { ...A, ...A.EARLY } : null;
+  if (A.on) st.rig = { R: mulberry32(dealSeed(li, attempt || 0) * 3 + 11), draws: 0, flips: 0, A: early };   // помощь (см. CFG.ASSIST; ямы 2–4 — EARLY)
+  return startDeal(L, st);
 }
 // ---------- помощь в тупике (CFG.ASSIST): только обмен с неизвестными картами ----------
-function assistP(L, st, which){ const A = CFG.ASSIST; if (!st.rig || !A.on) return 0; return (1 - st.gl / L.goalN) < A.HALF ? A[which][0] : A[which][1]; }
+function assistP(L, st, which){ const A = st.rig && st.rig.A || CFG.ASSIST; if (!st.rig || !A.on) return 0; return (1 - st.gl / L.goalN) < A.HALF ? A[which][0] : A[which][1]; }
 function fitsOpen(L, st, v){ for (let q = 0; q < L.n; q++) if (st.present[q] && st.cover[q] === 0 && ok(rk(v), rk(st.tab[q]))) return true; return false; }
 // перед добором: верх колоды ни к чему не подходит — меняется местами с первой подходящей картой из глубины колоды
 function rigDraw(L, st){
@@ -900,7 +958,19 @@ function endlessStart(seed, k, alive, fake){
 // сколько карт уходит со счёта кучи за яму, где снято n из L.n
 function endlessFake(run, L, n){ const sp = endlessSpec(run.k); return Math.round(sp.shown * CFG.ENDLESS.JOKER_AT / sp.jokerPits * (0.6 + 0.8 * n / Math.max(1, L.n))); }
 const jokerDue = (run) => !run.joker && run.fake >= CFG.ENDLESS.JOKER_AT * run.shown;
+// урок (Андрей: «маленькая родная форма, без автодоигрывания»): на тузе 4 карты, ранги цепочкой сверху вниз — как яма tiny теста,
+// колода обычная; рука показывает, куда тапнуть. Только первая яма самого первого забега (run.tutor)
+function endlessTutorPit(run){
+  const P = run.P, R = run.R, T = CFG.PITS.tiny, cand = shuffle(nearby(P, 0, 0, P.rad * 0.6).filter(g => run.alive[g]), R);
+  for (const g of cand.slice(0, 400)){
+    const c = coneOf(P, run.alive, g, T.hi); if (!c || c.size - 1 !== T.lo) continue;
+    const L = buildPit(P, run.alive, g, T.R, CFG.JOIN_IN_R); if (!L || L.goalN - 1 !== T.lo) continue;
+    L.kind = 'tiny'; L.D = CFG.ENDLESS.START_D; L.joker = false; return L;
+  }
+  return null;
+}
 function endlessNextPit(run){
+  if (run.tutor && !run.pits){ const T = endlessTutorPit(run); if (T) return T; }
   const L = endlessFindPit(run, CFG.ENDLESS.lo, true);
   if (L){ L.joker = jokerDue(run); return L; }
   if (run.joker) return null;
@@ -908,7 +978,7 @@ function endlessNextPit(run){
   return J;
 }
 function endlessFindPit(run, lo, corridor){
-  const P = run.P, E = CFG.ENDLESS, R = run.R;
+  const P = run.P, E = CFG.ENDLESS, R = run.R, CR = run.pits < E.EASY_PITS ? E.EASY_CORRIDOR : E.CORRIDOR;
   const cx = run.last >= 0 ? P.x[run.last] : 0, cy = run.last >= 0 ? P.y[run.last] : 0;
   for (const [r0, r1] of [[E.NEXT_MIN, E.NEXT_MAX], [0, E.NEXT_MAX * 2], [0, 1e9]]){
     const cand = (r1 > 1e8 ? [...Array(P.N).keys()] : nearby(P, cx, cy, r1)).filter(g => run.alive[g] && Math.hypot(P.x[g] - cx, P.y[g] - cy) >= r0);
@@ -922,15 +992,16 @@ function endlessFindPit(run, lo, corridor){
       L.D = E.START_D; L.kind = 'endless';
       if (!corridor) return L;
       let w = 0; for (let k = 0; k < E.CHECK_N; k++){ const st = deal(L, 16, mulberry32(g * 31 + k)); if (loop(L, st, { bot: 'greedy' }, mulberry32(k + 1), null)) w++; }
-      const pct = 100 * w / E.CHECK_N; if (pct < E.CORRIDOR[0] || pct > E.CORRIDOR[1]) continue;
+      const pct = 100 * w / E.CHECK_N; if (pct < CR[0] || pct > CR[1]) continue;
       return L;
     }
   }
   return null;
 }
 // Раздача ямы забега: ранги ямы — из свежих перетасованных колод; колода, текущая и серия — от прошлой ямы
-// (в первой — из той же колоды, что ранги). На старте есть ход без колоды (CFG.START_MOVE).
-function endlessDeal(L, prev, R){
+// (в первой — из той же колоды, что ранги). На старте — серия без колоды (CFG.START_CHAIN).
+function endlessDeal(L, prev, R, pitNo){   // pitNo — какая это яма забега по счёту (0 — первая): первые EASY_PITS полегче
+  if (L.kind === 'tiny'){ const st = chainDeal(L), d = freshDeck(R); st.stock = d.slice(0, CFG.ENDLESS.START_D); st.rest = d.slice(CFG.ENDLESS.START_D); for (const v of d) st.pool[rk(v)]++; return st; }   // урок: цепочка, колода свежая
   const E = CFG.ENDLESS, k = Math.max(1, Math.ceil((L.n + (prev ? 0 : 1 + E.START_D)) / 52));
   const vals = []; for (let d = 0; d < k; d++) for (let i = 0; i < 52; i++) vals.push(i);
   shuffle(vals, R);
@@ -941,7 +1012,8 @@ function endlessDeal(L, prev, R){
     pool: new Int16Array(V), known: new Int16Array(V), streak: prev ? prev.streak : 0, last: -1 };
   for (let q = 0; q < L.n; q++) st.pool[rk(tab[q])]++; st.pool[rk(top)]++; for (const v of stock) st.pool[rk(v)]++; for (const v of st.rest) st.pool[rk(v)]++;
   st.known[rk(top)]++; for (let q = 0; q < L.n; q++) if (!st.cover[q] && q !== L.goldIdx) st.known[rk(tab[q])]++;
-  return CFG.START_MOVE ? ensureStartMove(L, st) : st;
+  if (E.ASSIST.on) st.rig = { R: mulberry32(L.gold * 13 + 5), draws: 0, flips: 0, A: pitNo !== undefined && pitNo < E.EASY_PITS ? E.EASY_ASSIST : E.ASSIST };   // помощь в тупике, первые ямы — сильнее
+  return startDeal(L, st);
 }
 // награда за туз: +GOLD_CARDS карт в колоду (из свежей колоды)
 function endlessReward(st, R){ const d = freshDeck(R); for (let i = 0; i < CFG.ENDLESS.GOLD_CARDS; i++) st.stock.push(d[i % 52]); }
@@ -954,9 +1026,9 @@ function endlessBotRun(seed, bot, p5, k, untilJoker){
   const run = endlessStart(seed, k), RB = mulberry32(seed * 13 + 7); let st = null; run.acts = 0; run.losses = 0; run.jokerPit = -1;
   for (let pit = 0; pit < 300; pit++){
     const L = endlessNextPit(run); if (!L) break;
-    st = endlessDeal(L, st, run.R); const m = newMetrics();
-    let win = loop(L, st, { bot }, RB, m);
-    while (!win && nearMiss(st) && p5 > 0){ p5--; st = plusFiveRigged(L, st, RB); win = loop(L, st, { bot }, RB, m); }
+    st = endlessDeal(L, st, run.R, run.pits); const m = newMetrics();
+    let win = loop(L, st, { bot, rig: true }, RB, m);
+    while (!win && nearMiss(st) && p5 > 0){ p5--; st = plusFiveRigged(L, st, RB); win = loop(L, st, { bot, rig: true }, RB, m); }
     run.acts += m.taps + m.draws;
     endlessCommit(run, L, st);
     if (!win){ if (!untilJoker) break; run.losses++; st = null; continue; }
@@ -2009,6 +2081,12 @@ function angDiff(a, b){ let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; whi
 // curves — свои кривые по ключам CAM (остальные easeIO); вид дома (kind) сохраняется, если цель его не задаёт ({ ...CAM, … }):
 // иначе reframe, ограничение орбиты, fit и возврат орбиты молча решат, что камера не в яме.
 // delay — старт через столько мс (до него q < 0, кривые держат камеру на месте); в журнале fx.start с info delay=…
+// кривые высоты стога (доля пути ys от A к B): на подлёте — силуэт → естественная высота, держится, сплющивание в конце;
+// на отъезде — объём сразу, вытягивание в силуэт к концу. ysTrack — точка взгляда идёт по поверхности стога при любой ys
+function ysIn(a, b){ const FX = CFG.FX, f1 = a === b ? 1 : Math.max(0, Math.min(1, (a - FX.YS_HOLD) / (a - b)));
+  return (q) => q < FX.YS_DROP_TO ? f1 * easeOutCubic(q / FX.YS_DROP_TO) : q < FX.YS_FLAT_AT ? f1 : f1 + (1 - f1) * easeInOutSine((q - FX.YS_FLAT_AT) / (1 - FX.YS_FLAT_AT)); }
+function ysOut(a, b){ const FX = CFG.FX, f1 = a === b ? 1 : Math.max(0, Math.min(1, (FX.YS_HOLD - a) / (b - a))), r = 1 - FX.YS_FLAT_AT, h = 1 - FX.YS_DROP_TO;
+  return (q) => q < r ? f1 * easeInOutSine(q / r) : q < h ? f1 : f1 + (1 - f1) * easeInOutSine((q - h) / (1 - h)); }
 function tweenCam(to, ms, name, done, curves, delay){
   spin = null; zoom = 1;
   camTw = { t0: now() + (delay || 0), ms: REDUCED ? 1 : ms, a: { ...CAM }, b: { ...to }, name, done, curves };
@@ -2024,7 +2102,9 @@ function searchCam(){
   G.sz += (G.szTo - G.sz) * (G.szK ?? 1); const k = Math.max(0, Math.min(1, G.sz));
   const lim = P.rad * 1.3, f = G.sfocus; const r = Math.hypot(f.x, f.z); if (r > lim){ f.x *= lim / r; f.z *= lim / r; }
   const pull = k * k, tx = f.x * (1 - pull), tz = f.z * (1 - pull);
-  CAM.ys = CFG.PIT_YSCALE + (CFG.OVER_YSCALE * 0.6 - CFG.PIT_YSCALE) * Math.max(0, Math.min(1, (k - 0.25) / 0.75));
+  const FX = CFG.FX, yf = Math.max(0, Math.min(1, (k - FX.SEARCH_YS_FLAT) / (FX.SEARCH_YS_HOLD - FX.SEARCH_YS_FLAT)));   // плоская — только совсем вблизи
+  CAM.ys = k >= FX.SEARCH_YS_HOLD ? FX.YS_HOLD + (CFG.OVER_YSCALE * 0.6 - FX.YS_HOLD) * (k - FX.SEARCH_YS_HOLD) / (1 - FX.SEARCH_YS_HOLD)
+    : CFG.PIT_YSCALE + (FX.YS_HOLD - CFG.PIT_YSCALE) * yf * yf * (3 - 2 * yf);
   CAM.dist = dClose * Math.pow(dFar / dClose, k); CAM.yaw = 0; CAM.pitch = CFG.PIT_PITCH + (CFG.OVER_PITCH + 0.15 - CFG.PIT_PITCH) * k;
   CAM.tx = tx; CAM.tz = tz; CAM.ty = heightAt(tx, tz) * CAM.ys * (1 - k) + S.maxH * 0.3 * CAM.ys * k;
 }
@@ -2034,8 +2114,9 @@ function updateCamera(t){
   if (G.mode === 'search' && G.srch && !camTw){ if (G.orbitBack){ G.orbitBack = false; log('fx.end', 'cam.orbit', 'cut'); } searchCam(); return; }
   const FX = CFG.FX; let orbiting = false;
   if (camTw){
-    const q = Math.min(1, (t - camTw.t0) / camTw.ms), A = camTw.a, B = camTw.b, cv = camTw.curves;   // q < 0 — старт отложен (наезд после стоп-кадра)
+    const q = G.camQ != null ? G.camQ : Math.min(1, (t - camTw.t0) / camTw.ms), A = camTw.a, B = camTw.b, cv = camTw.curves;   // G.camQ — твин заморожен (STOG.camQ)   // q < 0 — старт отложен (наезд после стоп-кадра)
     for (const k of CAM_KEYS) CAM[k] = A[k] + (B[k] - A[k]) * ((cv && cv[k]) || easeIO)(q);
+    if (cv && cv.ysTrack){ const ha = A.ty / A.ys, hb = B.ty / B.ys; CAM.ty = (ha + (hb - ha) * ((cv.ty || easeIO)(Math.max(0, q)))) * CAM.ys; }   // высота точки взгляда — по стогу без сплющивания
     if (camTw.name === 'dive' && q > 0.8) CAM.dist *= 1 - FX.DIVE_SETTLE * Math.sin(Math.PI * (q - 0.8) / 0.2);   // докатывание
     if (camTw.name === 'glide'){ const e = easeIO(q), s = Math.sin(Math.PI * e); CAM.dist *= 1 + FX.GLIDE_LIFT * s; CAM.pitch += FX.GLIDE_PITCH * s; }   // дуга над стогом
     if (q >= 1){ const tw = camTw; camTw = null; log('fx.end', 'cam.' + tw.name); if (tw.done) tw.done(); }
@@ -2178,6 +2259,7 @@ function nodeVisible(q){
 // ---------------------------------------------------------------------------
 function aliveFromSave(){
   const P = SP(), a = new Uint8Array(P.N).fill(1);
+  if (!CFG.MODES.campaign && !CFG.MODES.search){ const ep = G.save.endless.pile; if (ep && ep.removed) for (const i of ep.removed) if (i < P.N) a[i] = 0; if (S.face) setFaces(pileFaceSeed(ep ? ep.k : 0)); return a; }   // один режим — за меню куча забега
   for (const k in G.save.removed) for (const i of G.save.removed[k]) a[i] = 0;
   return a;
 }
@@ -2207,7 +2289,7 @@ function startLevel(li, fromPit){
   const h = overHome(li);
   const beginOver = () => { G.phase = 'over'; G.overAt = now(); G.lv.overAt = G.overAt; G.phaseUntil = G.overAt + (li >= 2 ? CFG.OVER_SHOW_LATE_MS : CFG.OVER_SHOW_MS);
     tip(li === 0 ? 'В стоге 10 000 карт и один золотой туз' : 'Следующий туз — здесь · тапни', 0); log('event', 'over.start', 'level=' + (li + 1)); };
-  if (fromPit){ G.phase = 'pullout'; tweenCam(h, 1500, 'pullout', beginOver); }
+  if (fromPit){ G.phase = 'pullout'; tweenCam(h, 1500, 'pullout', beginOver, { ys: ysOut(CAM.ys, h.ys), ysTrack: true }); }
   else { Object.assign(CAM, h); home = { ...h }; zoom = 1; camTw = null; beginOver(); }
   hud();
   log('event', 'level.start', 'level=' + (li + 1) + ' kind=' + G.L.kind + ' pit=' + G.L.n + ' onAce=' + (G.L.goalN - 1) + ' deck=' + G.st.stock.length);
@@ -2220,12 +2302,12 @@ function sparkFound(){
   const c = cardCenter(G.L.gold); burst(c.x / scale, c.y / scale, 16, 46, 700, (G.li + 2) * 97 + G.attempt);   // столб света над искрой схлопывается в эту вспышку
   const ph = pitHome(G.L); S.mesh.material.uniforms.uFaceRot.value = ph.flip; S.faceRot = ph.flip;
   // нырок: расстояние — плавный старт и посадка, стог сдувается раньше, чем прилетает камера, наклон чуть запаздывает
-  const FX = CFG.FX, dv = { dist: easeInOutQuint, ys: (t) => easeOutCubic(Math.min(1, t / FX.DIVE_YS_PART)),
+  const FX = CFG.FX, dv = { dist: easeInOutQuint, ys: ysIn(CAM.ys, ph.ys), ysTrack: true,
     pitch: (t) => easeInOutSine(Math.max(0, (t - FX.DIVE_PITCH_LAG) / (1 - FX.DIVE_PITCH_LAG))) };
   tweenCam(ph, CFG.DIVE_MS, 'dive', () => {
     G.phase = 'play'; G.lv.playAt = now(); G.lastInput = now(); buzz('diveEnd');
-    const camp = G.mode === 'campaign';   // в забеге G.li = −1: подсказка цели со сроком, как у следующих ям
-    tip(G.li === 0 ? 'Снимай карту на 1 больше или меньше' : goalTip(), camp && G.li < 2 ? 0 : G.mode === 'endless' ? 4000 : 6000, camp && G.li === 0 ? '' : 'goal');
+    const camp = G.mode === 'campaign', lesson = G.L.kind === 'tiny';   // в забеге G.li = −1: подсказка цели со сроком; урок — и в забеге
+    tip(lesson ? 'Снимай карту на 1 больше или меньше' : goalTip(), (camp && G.li < 2) || lesson ? 0 : G.mode === 'endless' ? 4000 : 6000, lesson ? '' : 'goal');
     const gp = quadPose(cardQuad(G.L.gold)); addFx({ kind: 'goalfly', pose: gp, dur: 800 }); goalBump(now() + 800);   // туз из ямы — в табличку цели
     checkStuck();
   }, dv);
@@ -2238,7 +2320,8 @@ function startEndless(){
   setScenePile(P); setFaces(pileFaceSeed(sv.k)); G.srch = null; setGoldSkin('gold');
   G.mode = 'endless'; E.runs++;
   const alive = new Uint8Array(P.N).fill(1); for (const i of sv.removed || []) if (i >= 0 && i < P.N) alive[i] = 0;
-  G.run = endlessStart(E.runs, sv.k, alive, sv.fake || 0); G.run.coins = 0; G.run.fake0 = G.run.fake; G.li = -1; G.attempt = 0; dropFx(); trayReset(); G.plus5Used = 0; G.offer = null;
+  G.run = endlessStart(E.runs, sv.k, alive, sv.fake || 0); G.run.coins = 0; G.run.fake0 = G.run.fake;
+  G.run.tutor = !G.save.seen.endlessTut && !sv.k && !G.run.removed;   // первая яма самого первого забега — урок G.li = -1; G.attempt = 0; dropFx(); trayReset(); G.plus5Used = 0; G.offer = null;
   G.st = sv.stock && sv.stock.length ? { top: sv.top, stock: sv.stock.slice(), streak: sv.streak || 0 } : null;   // колода из сейва: endlessDeal берёт top, stock, streak
   G.aliveNow = G.run.alive; G.lv = newLevelMetrics(-1);
   goto('game'); log('event', 'endless.start', 'run=' + G.run.seed + ' pile=' + (sv.k + 1) + ' left=' + endlessLeft() + ' deck=' + (G.st ? G.st.stock.length : 'new'));
@@ -2261,7 +2344,7 @@ function endlessSave(deckOut){
 function nextEndlessPit(first, ready){   // ready — яма, посчитанная заранее (endlessWin), null — ям больше нет
   const L = ready === undefined ? endlessNextPit(G.run) : ready; G.nextL = null;
   if (!L){ endlessNextPile(); return; }   // карт под туз не осталось — куча кончилась и без джокера
-  G.L = L; G.st = endlessDeal(L, G.st, G.run.R); goalSync(); setGoldSkin(L.joker ? 'joker' : 'gold');
+  G.L = L; G.st = endlessDeal(L, G.st, G.run.R, G.run.pits); goalSync(); if (!first || G.lv.done || G.lv.level !== 0) G.lv = newLevelMetrics(-1); setGoldSkin(L.joker ? 'joker' : 'gold');
   const P = SP(); G.nodeOf = new Int32Array(P.N).fill(-1); L.nodes.forEach((i, q) => { G.nodeOf[i] = q; });
   pickSparks(); clearAnims();
   log('event', 'endless.pit', 'n=' + (G.run.pits + 1) + ' pit=' + L.n + ' onAce=' + (L.goalN - 1) + ' deck=' + G.st.stock.length + (L.joker ? ' joker' : ''));
@@ -2279,7 +2362,8 @@ function nextEndlessPit(first, ready){   // ready — яма, посчитанн
     G.shrink = { from: Math.max(to, G.pitFrom || to), to, t0: t, descAt: 0, down: 0 }; G.pitFrom = to;   // счётчик — сколько ушло за яму
     addFx({ kind: 'endless.shrink', t0: t, dur: FX.SHRINK_UP_MS + FX.SHRINK_HOLD_MS, info: G.shrink.from + '→' + to });
     Audio.rise(); Audio.shrink(FX.SHRINK_COUNT_AT / 1000);
-    tweenCam(overHome(-1, CAM.yaw - 0.35), FX.SHRINK_UP_MS, 'shrink', () => { if (G.shrink) G.shrink.descAt = now() + FX.SHRINK_HOLD_MS; });   // рыскание прежнее: подъём без поворота
+    const oh = overHome(-1, CAM.yaw - 0.35);
+    tweenCam(oh, FX.SHRINK_UP_MS, 'shrink', () => { if (G.shrink) G.shrink.descAt = now() + FX.SHRINK_HOLD_MS; }, { ys: ysOut(CAM.ys, oh.ys), ysTrack: true });   // рыскание прежнее: подъём без поворота
   }
   hud();
 }
@@ -2287,7 +2371,7 @@ function nextEndlessPit(first, ready){   // ready — яма, посчитанн
 function endlessDescend(){
   const L = G.L, FX = CFG.FX; G.shrink.down = now(); G.pitOn = true; refreshData();
   const ph = pitHome(L); S.mesh.material.uniforms.uFaceRot.value = ph.flip; S.faceRot = ph.flip; Audio.whoosh();
-  const dv = { dist: easeInOutQuint, ys: (q) => easeOutCubic(Math.min(1, q / FX.DIVE_YS_PART)),
+  const dv = { dist: easeInOutQuint, ys: ysIn(CAM.ys, ph.ys), ysTrack: true,
     pitch: (q) => easeInOutSine(Math.max(0, (q - FX.DIVE_PITCH_LAG) / (1 - FX.DIVE_PITCH_LAG))) };
   tweenCam(ph, FX.SHRINK_DOWN_MS, 'descend', () => {
     G.shrink = null; G.phase = 'play'; G.lastInput = now(); tip(goalTip(), 4000, 'goal'); buzz('diveEnd');
@@ -2377,7 +2461,8 @@ function endlessWin(quad){
   endlessReward(G.st, G.run.R);
   // яма закрывается и следующая считается сразу, в кадре тапа (2–13 мс), а не на переезде: порядок обращений к run.R
   // прежний (награда → следующая яма → раздача), сиды забега те же
-  endlessCommit(G.run, G.L, G.st); G.L.committed = true;
+  endlessCommit(G.run, G.L, G.st); G.L.committed = true; endlessPitDone(true);
+  if (G.L.kind === 'tiny'){ G.save.seen.endlessTut = 1; save(); }
   if (joker){ G.run.joker = true; G.nextL = null; G.jokerWinAt = t; G.save.endless.jokers = (G.save.endless.jokers || 0) + 1; jokerFx(t); }   // куча пройдена: дальше — переезд к следующей
   else G.nextL = endlessNextPit(G.run);
   endlessSave();
@@ -2390,6 +2475,13 @@ function endlessWin(quad){
   coins(CFG.COIN_WIN, VW / 2, H * 0.32, 'туз', { rain: true, t0: t + FX.FREEZE_MS });
   hud();
   log('event', joker ? 'endless.joker' : 'endless.ace', 'aces=' + G.run.aces + ' deck=' + G.st.stock.length + ' pile=' + (G.run.k + 1));
+}
+// итог ямы забега — в «Итоги теста» (ключ eN, последние 30): время, доборы, помощь, кадр (fps, p95, slowPct) — замер с телефона
+function endlessPitDone(win){
+  const lv = G.lv; if (!lv || lv.done) return; lv.done = true; lv.levelMs = Math.round(now() - lv.startAt);
+  if (G.st && G.st.rig){ lv.rigDraws += G.st.rig.draws; lv.rigFlips += G.st.rig.flips; }
+  const E = G.save.endless, n = E.pitsTotal = (E.pitsTotal || 0) + 1, m = summarize(lv); m.pile = G.run.k + 1; m.win = !!win; m.joker = !!(G.L && G.L.joker); m.tutor = !!(G.L && G.L.kind === 'tiny');
+  G.save.metrics['e' + n] = m; const ks = Object.keys(G.save.metrics).filter(k => k[0] === 'e'); if (ks.length > 30) delete G.save.metrics[ks[0]];
 }
 // радужный джокер взят: радужные вспышки по экрану и табличка (drawJokerWin), звон
 function jokerFx(t){
@@ -2448,7 +2540,7 @@ function previewPile(P, off, grow, faceSeed){
   return { mesh, maxH: lc.maxH };
 }
 function endEndless(why){
-  if (G.L && G.st && !G.L.committed) endlessCommit(G.run, G.L, G.st);
+  if (G.L && G.st && !G.L.committed){ endlessCommit(G.run, G.L, G.st); endlessPitDone(false); }
   endlessSave(why === 'deck');   // колода кончилась — куча ждёт со снятым, колода дальше свежая
   const E = G.save.endless, aces = G.run.aces; G.run.over = true; E.aces += aces; const record = aces > E.best; if (record) E.best = aces;
   G.phase = 'idle'; save(); tip('');
@@ -3071,9 +3163,10 @@ function drawHand(c, x, y, t){
 }
 function hintTarget(t){                         // подсказка рукой: только на уроке и при знакомстве с колодой
   if (G.screen !== 'game') return null;
-  if (G.phase !== 'play' || G.mode !== 'campaign' || G.li > 1 || t - G.lastInput < CFG.HINT_IDLE_MS || down) return null;
+  const lesson = !!(G.L && G.L.kind === 'tiny');   // урок теста и первой ямы первого забега
+  if (G.phase !== 'play' || (!lesson && (G.mode !== 'campaign' || G.li > 1)) || t - G.lastInput < CFG.HINT_IDLE_MS || down) return null;
   const pl = playable(G.L, G.st);
-  if (pl.length && G.li === 0){ const q = pickVisibleTarget(pl, nodeVisible); if (q >= 0){ const p = cardCenter(G.L.nodes[q]); return { x: p.x / scale, y: p.y / scale }; } }
+  if (pl.length && lesson){ const q = pickVisibleTarget(pl, nodeVisible); if (q >= 0){ const p = cardCenter(G.L.nodes[q]); return { x: p.x / scale, y: p.y / scale }; } }
   if (!pl.length && G.st.stock.length){ const d = deckGeo(); return { x: d.x, y: d.y }; }
   return null;
 }
@@ -3364,13 +3457,17 @@ function goto(screen){
     const tSrch = tile('search', 'search', 'Иголка', 'куча ' + searchSpec(G.save.search.k).N.toLocaleString('ru-RU'));
     const ep = G.save.endless.pile, ek = ep ? ep.k : 0, eN = endlessSpec(ek).shown, eLeft = Math.max(0, eN - (ep && ep.fake || 0));
     const tEndl = tile('endless', 'endless', 'Бесконечный', 'куча ' + (ek + 1) + ' · ' + (eLeft < eN ? 'осталось ' + eLeft.toLocaleString('ru-RU') : eN.toLocaleString('ru-RU') + ' карт'));
-    const top = M.pitLive ? main('resume', 'Продолжить яму ' + (G.li + 1)) + `<div class="tiles">${tSrch}${tEndl}</div>`
+    const ep1 = G.save.endless.pile;
+    const top = !CFG.MODES.campaign && !CFG.MODES.search ? (M.runLive ? main('resume', 'Продолжить · куча ' + (G.run.k + 1)) : main('endless', ep1 ? 'Продолжить · куча ' + (ek + 1) : 'Старт'))
+        + (ep1 || M.runLive ? `<p class="sub">осталось ${(M.runLive ? endlessLeft() : eLeft).toLocaleString('ru-RU')} из ${eN.toLocaleString('ru-RU')} карт</p>` : '')
+      : M.pitLive ? main('resume', 'Продолжить яму ' + (G.li + 1)) + `<div class="tiles">${tSrch}${tEndl}</div>`
       : M.runLive ? main('resume', 'Продолжить кучу ' + (G.run.k + 1) + ' · осталось ' + endlessLeft().toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tSrch}</div>`
       : M.srchLive ? main('search', 'Продолжить поиск · куча ' + G.srch.P.N.toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tEndl}</div>`
       : main('play', done ? 'Тест заново' : 'Играть · яма ' + (lvl + 1) + ' из ' + N) + `<div class="tiles">${tSrch}${tEndl}</div>`;
     const link = (act, txt) => `<button data-act="${act}">${txt}</button>`;
-    show(`<p>Найди золотой туз в стоге из 10 000 карт</p>${top}
-      <div class="links">${link('results', 'Итоги теста')}·${link('help', 'Как играть')}·<button data-act="music"${G.save.music !== false ? '' : ' class="off"'} aria-pressed="${G.save.music !== false}">Музыка</button>${G.save.level ? '·' + link('restart', 'Сначала') : ''}</div>`, 'sheet menu');
+    const single = !CFG.MODES.campaign && !CFG.MODES.search, hasRes = Object.keys(G.save.metrics).length > 0, canReset = single ? !!(ep1 || G.save.endless.piles) : !!G.save.level;
+    show(`<p>${single ? 'Разбери стог и найди радужного джокера' : 'Найди золотой туз в стоге из 10 000 карт'}</p>${top}
+      <div class="links">${!single || hasRes ? link('results', 'Итоги') + '·' : ''}${link('help', 'Как играть')}·<button data-act="music"${G.save.music !== false ? '' : ' class="off"'} aria-pressed="${G.save.music !== false}">Музыка</button>${canReset ? '·' + link('restart', 'Сначала') : ''}</div>`, 'sheet menu');
     paintLogo(); menuView();
     // с общего плана камера отъезжает (стог целиком над листом); обратно — menuCamBack при выходе в общий план
     if (home && home.kind === 'over' && !camTw && !G.homeBeforeMenu){ G.homeBeforeMenu = { ...home }; tweenCam({ ...home, yaw: CAM.yaw, dist: home.dist * CFG.FX.MENU_DIST }, CFG.FX.MENU_CAM_MS, 'menu'); }
@@ -3385,7 +3482,7 @@ function goto(screen){
       + row('', 'Удержи палец — лупа. Потяни — поворот, щипок — ближе.');
     const endl = '<h3>Бесконечный стог</h3>' + row('endless', 'Ямы подряд, колода общая. Цель кучи — радужный джокер ближе к концу, дальше куча побольше. Золотой туз — +' + CFG.ENDLESS.GOLD_CARDS + ' карт. Колода кончилась — куча ждёт.');
     const srch = '<h3>Иголка в стоге</h3>' + row('search', 'В куче один золотой туз. Снимай любые открытые ±1, колода бесконечная. Золотая пыль — туз рядом, искра — почти наверху. Щипок или кнопка «вся куча» — увидеть кучу.');
-    const order = G.mode === 'search' ? [srch, pit, endl] : G.mode === 'endless' ? [endl, pit, srch] : [pit, endl, srch];
+    const order = !CFG.MODES.campaign && !CFG.MODES.search ? [pit, endl] : G.mode === 'search' ? [srch, pit, endl] : G.mode === 'endless' ? [endl, pit, srch] : [pit, endl, srch];
     show(`<h2>Как играть</h2><div class="help">${order.join('')}</div>
       <div class="foot"><button class="btn primary wide" data-act="${G.st && G.phase !== 'idle' ? 'resume' : 'menu'}">Понятно</button></div>`);
   }
@@ -3438,10 +3535,10 @@ function goto(screen){
 function resultsHtml(){
   const M = G.save.metrics, rows = [], clock = (ms) => ms === null || ms === undefined ? '—' : fmtClock(ms);
   let n = 0, sMiss = 0, sTime = 0, forks = 0, colds = 0, sFps = 0, nFps = 0, worst = 0, p5o = 0, p5t = 0;
-  for (let li = 0; li < LEVELS.length; li++){
-    const m = M[li]; if (!m) continue; n++;
+  for (const key of Object.keys(M)){   // ямы теста — по номеру, ямы забега — eN (Б — бесконечный, к — куча)
+    const m = M[key], li = key[0] === 'e' ? null : +key; if (!m) continue; n++;
     const p5 = m.plus5.map(o => (o.taken ? '+' : '−') + (o.frame === 'ace-open' ? 'Т' : o.onGold)).join(' ') || '—';
-    rows.push(`<tr><td>${li + 1}</td><td>${m.closed}/${m.dead}</td><td>${clock(m.levelMs)}</td><td>${m.attempts}</td><td>${p5}</td><td>${m.forks ? m.coldPicks + '/' + m.forks : '—'}</td><td>${m.fps === null ? '—' : Math.round(m.fps)}</td></tr>`);
+    rows.push(`<tr><td>${li === null ? 'к' + m.pile + (m.joker ? '★' : '') : li + 1}</td><td>${m.closed}/${m.dead}</td><td>${clock(m.levelMs)}</td><td>${m.attempts}</td><td>${p5}</td><td>${m.forks ? m.coldPicks + '/' + m.forks : '—'}</td><td>${m.fps === null ? '—' : Math.round(m.fps)}</td></tr>`);
     sMiss += m.closed + m.dead; sTime += m.levelMs || 0; forks += m.forks; colds += m.coldPicks;
     if (m.fps !== null){ sFps += m.fps; nFps++; } if (m.p95ms) worst = Math.max(worst, m.p95ms);
     for (const o of m.plus5){ p5o++; if (o.taken) p5t++; }
@@ -3461,7 +3558,7 @@ $('card').addEventListener('click', (e) => {
   log('input', 'button', act);
   if (act === 'play'){ if (G.save.level >= LEVELS.length){ G.resetThen = 'play'; goto('confirm-reset'); } else startLevel(G.save.level); }
   else if (act === 'next') startLevel(G.li + 1, true);
-  else if (act === 'endless'){ if (G.save.seen.endless) endlessSoon(); else goto('intro-endless'); }   // первый вход — интро, между уровнями
+  else if (act === 'endless'){ if (G.save.seen.endless || !CFG.MODES.campaign && !CFG.MODES.search) endlessSoon(); else goto('intro-endless'); }   // один режим — без экрана интро: учит первая яма   // первый вход — интро, между уровнями
   else if (act === 'endless-go'){ G.save.seen.endless = 1; save(); endlessSoon(); }
   else if (act === 'search'){ if (menuModel().srchLive) goto('game'); else if (G.save.seen.search) searchSoon(); else goto('intro-search'); }
   else if (act === 'search-go'){ G.save.seen.search = 1; save(); searchSoon(); }
@@ -3486,7 +3583,8 @@ function resetProgress(){
   leaveMode('reset');
   if (G.mode !== 'campaign'){ if (G.mode === 'search') searchSave(true); G.mode = 'campaign'; G.srch = null; G.run = null; setScenePile(pile()); }
   if (Object.keys(G.save.metrics).length) G.save.metricsPrev = G.save.metrics;   // прежние итоги не теряются совсем
-  G.save.level = 0; G.save.removed = {}; G.save.metrics = {}; G.save.coins = CFG.COINS_START; G.coinsShown = G.save.coins; save();
+  G.save.level = 0; G.save.removed = {}; G.save.metrics = {}; G.save.coins = CFG.COINS_START; G.coinsShown = G.save.coins;
+  G.save.endless.pile = null; G.save.endless.piles = 0; G.save.endless.pitsTotal = 0; save();   // и куча забега (урок второй раз не показывается)
   G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; G.phase = 'idle'; dropFx(); G.offer = null; G.shrink = null; tip('');
   G.aliveNow = aliveFromSave(); clearAnims(); refreshData(); const U = S.mesh.material.uniforms; U.uDim.value = 0; U.uFaceRot.value = 0; S.faceRot = 0;
   const h = overHome(0); Object.assign(CAM, h); home = { ...h }; camTw = null; spin = null; zoom = 1; hud();
@@ -3632,7 +3730,7 @@ function tapAt(p){
   if (a >= 0){ G.lv.assist++; playNode(a, 'assist'); return; }
   if (onBack){ G.lv.closed++; showHolders(q, hit); Audio.peek(); buzz('closed'); tipOnce('hold', 'Её держат обведённые карты — сними их', CFG.FX.TIP_HOLD_MS); return; }
   if (hit >= 0){ G.lv.dead++; miss(hit); log('input', 'tap.dead', S.open0[hit] || nodeCover(hit) ? 'stack' : 'ground');
-    const lesson = G.mode === 'campaign' && G.li === 0;   // на уроке — всегда, иначе первые TIP_MISS_N раз за сессию
+    const lesson = !!(G.L && G.L.kind === 'tiny');   // на уроке — всегда, иначе первые TIP_MISS_N раз за сессию
     if (lesson || G.missTips < CFG.FX.TIP_MISS_N){ if (!lesson) G.missTips++; tipOnce(null, 'Эта карта не в яме — играют только яркие', CFG.FX.TIP_MISS_MS); }
     return; }
   log('input', 'tap.empty');
@@ -3823,7 +3921,7 @@ const BACKDROP_SCREENS = ['win', 'results', 'help', 'search-win', 'endless-over'
 function tick(t, fromRaf){
   if (!S.ok) return;
   // панель снизу выезжает в яме и прячется на общем плане; в нырке — с DIVE_TRAY пути (G.diveK — доля нырка, вне нырка 1)
-  G.diveK = camTw && camTw.name === 'dive' ? Math.max(0, Math.min(1, (t - camTw.t0) / camTw.ms)) : 1;
+  G.diveK = camTw && camTw.name === 'dive' ? Math.max(0, Math.min(1, G.camQ != null ? G.camQ : (t - camTw.t0) / camTw.ms)) : 1;
   const wantTray = G.screen !== 'menu' && (G.L || (G.mode === 'search' && G.srch)) && !NO_TRAY.has(G.phase)
     && !(G.phase === 'dive' && G.diveK < CFG.FX.DIVE_TRAY) ? 1 : 0;
   if (G.mode === 'search' && G.srch && !G.srch.won && G.screen === 'game' && !G.paused) G.srchElapsed += Math.min(250, t - (G.srchTickAt || t));   // время — на табличке (canvas), не в шапке
@@ -3951,11 +4049,13 @@ window.STOG = {
   },
   play(n){ startLevel((n || 1) - 1); return this.state(); },
   endless(){ G.save.seen.endless = 1; save(); startEndless(); return this.state(); },
+  camQ(q){ G.camQ = q === undefined ? null : q; return q; },   // заморозить твин камеры на доле q (кадры нырка «до/после»); null — отпустить
   // куча k, снято frac (сверху вниз, только открытые) — проверить джокер и переезд, не разбирая кучу руками
   endlessAt(k, frac){ leaveMode('debug'); G.run = null; G.save.seen.endless = 1;
     G.save.endless.pile = { k, removed: [], fake: Math.round((frac || 0) * endlessSpec(k).shown), stock: null, top: -1, streak: 0 }; save(); startEndless(); return this.state(); },   // хуки — без интро (qa/shots.mjs снимает режимы после localStorage.clear)
   search(k){ G.save.seen.search = 1; save(); startSearch(k); return this.sstate(); },
-  sstate(){ const Z = G.srch; return Z ? { pile: Z.k + 1, n: Z.P.N, removed: Z.removed, taps: Z.taps, onGold: Z.cover[Z.gold], found: Z.found, won: Z.won, sz: +G.sz.toFixed(2), pxu: Math.round(pxuNow()), heat: +heatNow(now()).toFixed(2), ms: Math.round(G.srchElapsed), phase: G.phase, screen: G.screen } : null; },
+  szoom(z){ if (G.srch){ G.szTo = G.sz = z; } return z; },   // поиск: зум (0 — карта ~72 px, 1 — вся куча)
+  sstate(){ const Z = G.srch; return Z ? { pile: Z.k + 1, n: Z.P.N, removed: Z.removed, taps: Z.taps, onGold: Z.cover[Z.gold], found: Z.found, won: Z.won, sz: +G.sz.toFixed(2), ys: +S.ys.toFixed(2), pxu: Math.round(pxuNow()), heat: +heatNow(now()).toFixed(2), ms: Math.round(G.srchElapsed), phase: G.phase, screen: G.screen } : null; },
   sbot(){ const Z = G.srch; if (!Z || Z.won) return null; if (Z.found){ G.preWinTop = Z.top; searchTap(Z, Z.gold); searchWin(cardQuad(Z.gold)); return 'gold'; }
     const pl = searchPlayable(Z).filter(i => i !== Z.gold); if (!pl.length){ searchDeck(); return 'deck'; }
     const P = Z.P; let best = pl[0], bd = 1e9; for (const i of pl){ const d = Math.hypot(P.x[i] - P.x[Z.gold], P.y[i] - P.y[Z.gold]); if (d < bd){ bd = d; best = i; } }
