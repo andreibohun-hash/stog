@@ -307,6 +307,10 @@ const CFG = {
     VIEW_R_MAX: 9,        //   предел расширения (в окне пусто и там — фронт переезжает к ближайшей открытой)
     VIEW_STEP: 0.5,
     FRONT_K: 0.2,         //   доля шага фронта к снятой карте (EMA по ~5 картам)
+    CARD_HYST: 1.0,       //   карта, уже бывшая в окне, выходит из него, только если дальше радиуса на столько (гистерезис на карту)…
+    KEEP_TAPS: 3,         //   …и не раньше чем через столько тапов после входа (плейтест v34: «карты то открываются, то пропадают»).
+                          //   Лицо, однажды показанное, не прячется: решённое лицо вне окна — лицом, но тёмным (OUT_FACE)
+    START_CHAIN: 3,       //   на старте в окне ближе всего к центру — лесенка из стольких карт к верхней (ход есть всегда, серия 2–3)
     OUT_DIM: 0.5,         //   яркость закрытых вне ямы
     OUT_FACE: 0.6,        //   открытые вне ямы — рубашкой посветлее: видно, что карта свободна, но не в яме (лицо решится, когда яма дорастёт)
     DEPTH_STEP: 0.04,     //   закрытые в яме: 1 − столько на каждую карту ямы сверху (логическое покрытие, порог OVERLAP_MIN)…
@@ -1308,13 +1312,15 @@ function wholeStart(seed, coll, plain, Nsize){
   const P = wholePile(Nsize), R = mulberry32(seed), N = P.N;
   const S = { k: 0, whole: true, seed, P, gold: -1, R, face: new Int16Array(N).fill(FACE_NONE), alive: new Uint8Array(N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)), zone: new Uint8Array(N),
     top: 0, streak: 0, best: 0, taps: 0, draws: 0, removed: 0, found: false, won: false, plain: !!plain, order: [],
-    goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0 };
+    goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0, openAt: new Int32Array(N).fill(-1) };
   if (!plain) wholeSchedule(S, R);
   S.front = { x: 0, y: 0 }; S.viewR = CFG.WHOLE.VIEW_R; S.zoneList = []; zoneUpdate(S);   // старт: окно на верхушке
-  for (let i = 0; i < N; i++) if (S.zone[i] && !S.cover[i] && S.face[i] === FACE_NONE) S.face[i] = Math.floor(R() * 52);   // открытые в яме на старте — лицом сразу
-  const inz = []; for (let i = 0; i < N; i++) if (S.zone[i] && !S.cover[i] && S.face[i] >= 0 && S.face[i] < 52) inz.push(i);
-  const c = inz.length ? inz[Math.floor(R() * inz.length)] : -1;                                                 // стартовая карта — ±1 к открытой в яме
-  S.top = c >= 0 ? (rk(S.face[c]) + (R() < 0.5 ? 1 : 12)) % 13 + 13 * Math.floor(R() * 4) : Math.floor(R() * 52);
+  // старт: верхняя карта случайна; ближайшие к центру окна открытые без лица — лесенка к ней (top ± 1, ± 2, ± 3: ход есть всегда,
+  // серия START_CHAIN; плейтест v34: «старт без опции снять с поля»), остальные открытые в окне — случайные лица не ранга верхней
+  S.top = Math.floor(R() * 52); const r0 = rk(S.top), dir = R() < 0.5 ? 1 : -1;
+  const inz = []; for (let i = 0; i < N; i++) if (S.zone[i] && !S.cover[i] && S.face[i] === FACE_NONE) inz.push([i, Math.hypot(P.x[i], P.y[i])]);
+  inz.sort((a, b) => a[1] - b[1]);
+  inz.forEach(([i], k) => { if (k < CFG.WHOLE.START_CHAIN) S.face[i] = (r0 + 13 + dir * (k + 1)) % 13 + 13 * Math.floor(R() * 4); else { let f; do f = Math.floor(R() * 52); while (rk(f) === r0); S.face[i] = f; } });
   S.goal = plain ? 1e9 : wholeGoal(S);
   return S;
 }
@@ -1402,9 +1408,8 @@ function wholeRestore(S, sv){
     if (i < 0 || i >= P.N || !S.alive[i]) continue;
     S.alive[i] = 0; S.removed++; S.order.push(i); for (const j of P.below[i]) if (S.alive[j]) S.cover[j]--;
     const f = S.face[i]; if (wholeIsHalf(f)){ const J = S.jok[(f - FACE_HALF0) >> 1]; J.got++; J.sides[(f - FACE_HALF0) & 1] = 1; } else if (wholeIsPiece(f)) S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].got++;
-    frontStep(S, i);
+    frontStep(S, i); zoneUpdate(S);               // окно — шаг за шагом, как в игре (гистерезис на карту считает снятые)
   }
-  zoneUpdate(S);
   const placed = new Set(); for (let i = 0; i < P.N; i++){ const f = S.face[i]; if (f >= FACE_HALF0){ placed.add(f); if (wholeIsHalf(f)) S.jok[(f - FACE_HALF0) >> 1].cards[(f - FACE_HALF0) & 1] = i; else S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].cards[(f - FACE_PIECE0) % CFG.GOLD.PIECES] = i; } }
   S.sched = S.sched.filter(it => !placed.has(wholeSpecialFace(it))); S.schedN = 0;   // график — только ещё не назначенные (назначенные сидят в лицах)
   for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i] && S.face[i] === FACE_NONE) S.face[i] = Math.floor(S.R() * 52);   // открытая в яме без лица (сейв старой схемы)
@@ -1419,8 +1424,9 @@ function frontStep(S, i){ const P = S.P, k = CFG.WHOLE.FRONT_K; S.front.x += (P.
 // окно ямы вокруг фронта: радиус VIEW_R, шире — только пока открытых в окне меньше OPEN_TARGET (до VIEW_R_MAX); в окне пусто и там —
 // фронт переезжает к ближайшей открытой. Карты вне окна выходят из ямы. → карты, вошедшие в яму открытыми (новые для игрока)
 function zoneUpdate(S){
-  const P = S.P, W = CFG.WHOLE, was = S.zoneList || [];
+  const P = S.P, W = CFG.WHOLE, was = S.zoneList || [], tapN = S.removed;   // счётчик — снятые (одинаков в игре и при восстановлении сейва)
   for (const i of was) S.zone[i] = 0;
+  const keep = (i, R) => { const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); return d <= R + W.CARD_HYST || (!S.cover[i] && S.openAt[i] >= 0 && tapN - S.openAt[i] < W.KEEP_TAPS); };
   const place = () => {
     const f = S.front, cand = nearby(P, f.x, f.y, W.VIEW_R_MAX).filter(i => S.alive[i]).map(i => [i, Math.hypot(P.x[i] - f.x, P.y[i] - f.y)]).sort((a, b) => a[1] - b[1]);
     const cnt = (R) => { let n = 0; for (const [i, d] of cand) if (d <= R && !S.cover[i]) n++; return n; };
@@ -1430,11 +1436,14 @@ function zoneUpdate(S){
     return { cand, R, open };
   };
   let z = place();
-  if (!z.open){ let b = -1, bd = 1e9; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); if (d < bd){ bd = d; b = i; } }
+  if (!z.open && !was.some(i => S.alive[i] && !S.cover[i] && keep(i, z.R))){   // пусто и с учётом удержанных — фронт к ближайшей открытой
+    let b = -1, bd = 1e9; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); if (d < bd){ bd = d; b = i; } }
     if (b >= 0){ S.front = { x: P.x[b], y: P.y[b] }; S.viewR = W.VIEW_R; z = place(); } }
-  S.viewR = z.R; const list = [], out = [];
-  for (const [i, d] of z.cand) if (d <= z.R){ S.zone[i] = 1; list.push(i); }
-  const old = new Set(was); for (const i of list) if (!old.has(i) && !S.cover[i]) out.push(i);
+  S.viewR = z.R; const list = [], out = [], old = new Set(was), inList = new Set();
+  for (const [i, d] of z.cand) if (d <= z.R){ S.zone[i] = 1; list.push(i); inList.add(i); }
+  // гистерезис на карту: бывшая в окне остаётся, пока не дальше R + CARD_HYST, а открытая — не раньше KEEP_TAPS тапов после входа
+  for (const i of was){ if (inList.has(i) || !S.alive[i]) continue; if (keep(i, z.R)){ S.zone[i] = 1; list.push(i); inList.add(i); } else S.openAt[i] = -1; }
+  for (const i of list){ if (!S.cover[i] && S.openAt[i] < 0){ S.openAt[i] = tapN; if (!old.has(i) || S.openAt[i] === tapN) out.push(i); } }   // открытой в окне стала сейчас — новая для игрока
   S.zoneList = list; return out;
 }
 // бот «Одного стога» (сим): играет в окне радиуса view (высот карты) у последней снятой, как человек в кадре; половинку в кадре
@@ -2529,8 +2538,10 @@ function refreshSearch(){
     if (!Z.alive[i]){ a[o + 3] = -1; continue; }
     const cov = Z.cover[i];
     if (i === Z.gold){ a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = cov ? 0.85 : 1; a[o + 3] = 7; }
-    else if (Z.whole && (cov || !Z.zone[i])){        // «Один стог»: рубашка с тоном по слою и зоне, не темнее того, на чём лежит (wholeTones)
+    else if (Z.whole && (cov || Z.face[i] < 0)){     // «Один стог»: рубашка с тоном по слою и зоне, не темнее того, на чём лежит (wholeTones)
       a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = tones[i]; a[o + 3] = 2; }
+    else if (Z.whole && !Z.zone[i]){                 // решённое лицо вне окна — лицом, но тёмным: показанное не прячется (v34)
+      const [cn, cf] = faceCells(Z, i); a[o] = cn; a[o + 1] = cf; a[o + 2] = tones[i]; a[o + 3] = 3; }
     else if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.55, 0.9 - 0.04 * cov); a[o + 3] = 2; }
     else { const [cn, cf, sp] = faceCells(Z, i); a[o] = cn; a[o + 1] = cf; a[o + 2] = 1; a[o + 3] = sp ? 7 : 3; }   // особые карты (половинка, кусочек) блестят, как золото
   }
