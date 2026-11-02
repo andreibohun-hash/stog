@@ -166,7 +166,7 @@ table.res tr.tot td{border-bottom:0;color:var(--accent)}
   <div id="tip"></div>
   <div id="loupe"><canvas id="loupe-cv" width="144" height="202"></canvas><small id="loupe-txt"></small></div>
   <div id="loading">Стог укладывается…</div>
-  <div id="overlay"><div id="logo"><b>СТ<canvas id="logo-ace" width="60" height="84"></canvas>Г</b><small>10 000 карт · 1 радужный джокер</small></div><div class="card" id="card"></div></div>
+  <div id="overlay"><div id="logo"><b>СТ<canvas id="logo-ace" width="60" height="84"></canvas>Г</b><small>3 000 карт · цепочки, джокеры, золото</small></div><div class="card" id="card"></div></div>
   <div id="toast" class="hide"></div>
 </div>
 <!-- three.js 0.185.1, вендорен файлом (CJS-сборка + шим exports → window.THREE). CDN не используется. -->
@@ -274,7 +274,19 @@ const CFG = {
   WHOLE: {               // «Один стог» (Андрей 02.11): весь стог — одна яма, разбираем до конца, сейв в рамках стога.
                           // Механика поиска без туза: любые открытые ±1, колода бесконечная. Калибровка — `node sim.mjs whole`
     N: 3000,              //   карт в стоге (Андрей 02.11: 10 000 — ~4,5 ч, много); 10 000 — стог бесконечного, иначе свой граф тем же генератором
-    HELP: 0.6,            //   колода: в кадре ни одна открытая не подходит к новой карте — с этой вероятностью подходит к одной из них
+    HELP: 0.95,           //   колода: в кадре ни одна открытая не подходит к новой карте — с этой вероятностью подходит к одной из них
+                          //   (0,6 → 0,95, Андрей 02.11 вечер: добор — начало новой цепочки, а не поиск хода по стогу)
+    CHAIN: {              //   цепочка «в масть» (Андрей 02.11 вечер: «подыгрывать, чтобы легко набирал цепочку и иногда сбрасывалась»):
+                          //   лица решаются при перевороте; пока серия короче скрытой цели — одна из открывшихся карт ±1 к взятой,
+                          //   серия дошла до цели — открывающиеся карты не ±1 (срыв за 1–3 карты на видимых); добор — новая цель
+      GOAL: [12, 24],     //     цель цепочки — случайно в этих границах (сид стога); калибровка `node sim.mjs whole`: медиана серии 14–18
+      POOL: [2, 3],       //     пока серия короче цели: остальные открывшиеся — «тёплый пул», ранг текущей ± столько (через шаг станут ±1)
+      BREAK: [4, 6],      //     серия дошла до цели: открывающиеся — ранг текущей ± столько (далеко: цепочка гаснет на видимых за 1–3 карты)
+    },
+    JOKER_BANDS: [[0.04, 0.3], [0.36, 0.62], [0.68, 0.92]],   // половинки джокера k (CFG.JOKERS[k]) лежат в этой полосе глубины
+                          //   (доля стога по порядку, в котором до карт доходит бот — wholeReach); обе половинки — в одной полосе,
+                          //   разнесены не меньше JOKER_SPREAD радиусов кучи
+    JOKER_SPREAD: 0.45,
     ZONE0: 2.8,           //   яма растёт (Андрей 02.11: «чтобы не было так много открытых»): на старте — карты в этом радиусе от верхушки,
     GROW: 1.2,            //   снятая карта берёт в яму карты в этом радиусе (1,1 — 2–5 открытых, мало: Андрей 02.11); вне ямы не снимаются
     OUT_DIM: 0.5,         //   яркость закрытых вне ямы (в яме закрытые — 1 − 0,04 на карту сверху)
@@ -282,6 +294,20 @@ const CFG = {
     MILE: 0.1,            //   праздник каждые столько стога: монеты и строка «разобрано N%»
     MILE_COINS: 10,
     COIN_DONE: 200,       //   монет за разобранный стог
+  },
+  GOLD: {                // золотые карты из кусочков (Андрей 02.11 вечер): в стоге лежат четверти золотой карты обычной колоды
+                          // (условно 9♥); все четыре собраны — карта уходит в колоду игрока и иногда выходит из неё: пока цепочка
+                          // живёт на ней, монеты ×2. Коллекция копится между стогами (save.gold.cards)
+    PER_PILE: 4,          //   золотых карт на стог (ранг+масть без повторов)…
+    PIECES: 4,            //   …по столько кусочков у каждой
+    BAND: 0.5,            //   кусочки карты g лежат в полосе глубины [g/PER_PILE + 0,02; (g + BAND)/PER_PILE] (по wholeReach); внутри полосы
+                          //   кусочки идут по очереди (четверть полосы на кусочек). Бот собирает позже полосы (кусочек ждёт ранга):
+                          //   ~25 / 45 / 65 / 90% стога (`node sim.mjs whole`)
+    FIRST_AT: 0.05,       //   первый кусочек первой карты — не глубже этой доли стога (показать слой рано)
+    COIN_ASSEMBLE: 30,    //   монет за собранную золотую карту
+    DRAW_P_EACH: 0.08,    //   добор: верхней становится собранная золотая с вероятностью min(DRAW_P_MAX, DRAW_P_EACH × собранных)…
+    DRAW_P_MAX: 0.35,     //   …(по кругу; только если её ранг подходит к открытой карте в кадре — иначе обычный добор)
+    BONUS_X: 2,           //   монеты за снятую карту ×столько, пока цепочка живёт на золотой (до следующего добора)
   },
   DRAW_MARGIN: 3,         // планировщик берёт добор при живом ходе, только если тот выигрывает на столько прогонов чаще
   PLAN_N: 24,             // прогонов планировщика на решение
@@ -422,7 +448,8 @@ const CFG = {
     SEARCH_WIN_ZOOM: 0.85,//   …и зум ×столько (наезд без tweenCam — его перебивает searchCam; точка едет твином G.sfocusTw за PUSH_MS)
     STREAK_POP_MS: 220,   //   дорожка серии: новый сегмент выдвигается (высота 1,7 → 1, easeOutBack) за столько…
     STREAK_GLOW_MS: 300,  //   …и вспыхивает свечением 6 → 16 за столько
-    STREAK_MILE: 5,       //   рубежи серии — каждые столько карт (до 3-го): горящие сегменты вспыхивают белым слева направо…
+    STREAK_MILE: 5,       //   рубежи серии — каждые столько карт (до STREAK_MILES-го): горящие сегменты вспыхивают белым слева направо…
+    STREAK_MILES: 6,      //   рубежей столько (5…30; было 3 — до 15)
     STREAK_WAVE_MS: 20,   //   …с шагом столько на сегмент…
     STREAK_FLASH_MS: 120, //   …вспышка сегмента — столько
     STREAK_LOST_STEP_MS: 30, // обрыв серии ≥ 3: сегменты гаснут справа налево с таким шагом…
@@ -500,6 +527,24 @@ const CFG = {
     PING_MS: 900,         //   поиск: блеск появился впервые — два кольца радара по столько
     GLINT_STEP_MS: 350,   //   поиск: на тузе стало меньше карт — звезда блеска вспыхивает и гаснет за столько
     BEAM_H: 220,          //   поиск: туз открыт — луч над ним, px
+    // фил серии «Одного стога» (Андрей 02.11 вечер: «филовее, когда идёт цепочка»)
+    CHAIN_ZOOM: 0.92,     //   камера: с ростом серии лёгкий наезд — расстояние ×столько к CHAIN_ZOOM_AT карте (плавно)…
+    CHAIN_ZOOM_AT: 15,
+    CHAIN_OUT_MS: 400,    //   …срыв серии — отъезд назад за столько
+    FLIP_FAST_AT: 15,     //   перевороты открывшихся: шаг волны FLIP_STEP_MS × 1 → 0,5 к этой карте серии
+    LABEL_BIG_AT: 10,     //   подпись «серия N»: с этой карты крупнее (13 → 17 px) и теплее…
+    FIRE_AT: 20,          //   …с этой — с огнём (искры по контуру), «стог горит»: тёплый ореол на картах вокруг последней снятой…
+    HEAT_R: 3.2,          //   …радиусом столько высот карты…
+    HEAT_OUT_MS: 600,     //   …срыв — ореол гаснет за столько («выдох»)
+    SOUND_STREAK_MAX: 20, //   звук хода: высота и плотность шороха растут до этой карты серии (было 10), с SOUND_OCTAVE_AT — второй голос на октаву
+    SOUND_OCTAVE_AT: 10,
+    PIECE_FLY_MS: 650,    //   «Один стог»: кусочек золотой летит из стога в слот сборки на панели столько
+    GOLD_ASM_MS: 2600,    //   сборка золотой: стоп-кадр FREEZE_MS, четверти слетаются в центр (500 мс), вспышка, «ЗОЛОТАЯ 9♥!», всё — столько…
+    GOLD_ASM_OUT_MS: 450, //   …последние столько карта ныряет в колоду
+    HALF_FLY_MS: 750,     //   «Один стог»: половинка джокера летит из стога в мини-карту под ☰ столько…
+    HALF_LABEL_MS: 1700,  //   …подпись «ПОЛОВИНКА ДЖОКЕРА» держится столько
+    JOKER_ASM_MS: 2600,   //   «ДЖОКЕР СОБРАН!»: половинки съезжаются (450 мс), вспышка, имя и способность; всё — столько…
+    JOKER_ASM_OUT_MS: 400,//   …последние столько карта улетает в кнопку способности
     GOAL_BUMP_LAG_MS: 320,//   тупик рядом с тузом: табличка цели стучит дважды, второй раз — на столько позже…
     GOAL_BUMP_A: 0.14,    //   …на столько
     // звук, хаптика, прогрев и бюджет кадра (B8)
@@ -1119,20 +1164,15 @@ function searchStart(k, seed){
     top: Math.floor(R() * 52), streak: 0, taps: 0, draws: 0, removed: 0, found: false, won: false };
 }
 // снять карту i: открытая и ±1 к текущей; туз, когда открыт, берётся любым тапом. → { ok, why, opened, dust, gold }
-function searchTap(S, i){
+function searchTap(S, i, how){
+  if (S.whole) return wholeTap(S, i, how);      // «Один стог»: туза нет, цепочка, половинки и кусочки; how — способность джокера
   if (!S.alive[i]) return { ok: false, why: 'gone' };
   if (S.cover[i] > 0) return { ok: false, why: 'covered' };
-  if (S.zone && !S.zone[i]) return { ok: false, why: 'far' };
   const P = S.P;
   if (i === S.gold){ S.alive[i] = 0; S.removed++; S.taps++; S.won = true; return { ok: true, gold: true, opened: [], dust: 1 }; }
   if (!ok(rk(S.top), rk(S.face[i]))) return { ok: false, why: 'rank' };
   S.alive[i] = 0; S.removed++; S.taps++; S.top = S.face[i]; S.streak++;
   const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }
-  if (S.whole){                                // «Один стог»: туза нет, цель — снять всё; открывшиеся — те, что стали открыты и в яме
-    const fresh = zoneGrow(S, i); zoneEnsure(S, fresh);
-    const out = [...new Set([...opened, ...fresh])].filter(j => S.alive[j] && !S.cover[j] && S.zone[j]);
-    if (S.removed === P.N) S.won = true; return { ok: true, opened: out, dust: 0, done: S.won };
-  }
   if (opened.includes(S.gold)) S.found = true;
   const d = Math.hypot(P.x[i] - P.x[S.gold], P.y[i] - P.y[S.gold]);
   return { ok: true, opened, dust: d < CFG.SEARCH.DUST_R ? 1 - d / CFG.SEARCH.DUST_R : 0 };
@@ -1140,6 +1180,7 @@ function searchTap(S, i){
 // добор: ранг не повторяет текущую (Андрей 02.11: повторы подряд раздражают); near — открытые карты в кадре («Один стог»):
 // ни одна не подходит — с вероятностью WHOLE.HELP новая карта подходит к случайной из них
 function searchDraw(S, near){
+  if (S.whole) return wholeDraw(S, near);
   const r0 = rk(S.top); let top; do top = Math.floor(S.R() * 52); while (rk(top) === r0);
   if (near && near.length && S.R() < CFG.WHOLE.HELP && !near.some(i => ok(rk(top), rk(S.face[i])))){
     const f = rk(S.face[near[Math.floor(S.R() * near.length)]]); let nr = (f + (S.R() < 0.5 ? 1 : 12)) % 13;   // ±1 с переходом K↔A
@@ -1149,15 +1190,155 @@ function searchDraw(S, near){
   S.top = top; S.streak = 0; S.taps++; S.draws++;
 }
 // ================= «Один стог»: весь стог — одна яма, разбираем до конца =================
+// Лица карт решаются при перевороте (Андрей 02.11 вечер): S.face[i] = FACE_NONE, пока карта закрыта. Особые лица: половинка
+// джокера FACE_HALF0 + 2·k + сторона (k — CFG.JOKERS), кусочек золотой карты FACE_PIECE0 + PIECES·g + номер четверти.
+const FACE_NONE = -1, FACE_HALF0 = 100, FACE_PIECE0 = 200;
 let WPILE = null;
 function wholePile(){ const W = CFG.WHOLE; return W.N === CFG.PILE_N ? endlessPile() : WPILE || (WPILE = makePile(CFG.PILE_SEED, W.N, CFG.PILE_LAYERS, CFG.PILE_ROT_DEG, CFG.ENDLESS.OVERLAP_MIN)); }
-function wholeStart(seed){
-  const P = wholePile(), R = mulberry32(seed);
-  const face = new Int8Array(P.N); for (let i = 0; i < P.N; i++) face[i] = Math.floor(R() * 52);
-  const S = { k: 0, whole: true, P, gold: -1, R, face, alive: new Uint8Array(P.N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)), zone: new Uint8Array(P.N),
-    top: Math.floor(R() * 52), streak: 0, taps: 0, draws: 0, removed: 0, found: false, won: false };
+const wholeIsHalf = (f) => f >= FACE_HALF0 && f < FACE_PIECE0, wholeIsPiece = (f) => f >= FACE_PIECE0;
+// ранг карты стога для хода ±1: кусочек — ранг своей золотой карты; половинка (любой тап) и нерешённое лицо — −1
+function wholeRank(S, i){ const f = S.face[i]; return f < 0 || wholeIsHalf(f) ? -1 : wholeIsPiece(f) ? rk(S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].id) : rk(f); }
+// подходит ли открытая карта ямы i к рангу r (половинка — всегда: снимается любым тапом)
+function wholeFits(S, i, r){ return wholeIsHalf(S.face[i]) || ok(r === undefined ? rk(S.top) : r, wholeRank(S, i)); }
+function wholeGoal(S){ const [a, b] = CFG.WHOLE.CHAIN.GOAL; return a + Math.floor(S.R() * (b - a + 1)); }
+// порядок, в котором до карт доходит бот с окном 7 на простых случайных лицах (без джокеров и золота): reach[i] — доля стога,
+// снятая к моменту, когда снята карта i (0 — первая, 1 — последняя). По нему раскладываются половинки и кусочки: «первая треть»,
+// «к концу» — это про то, когда игрок до карты дойдёт, а не про высоту в стоге. Считается один раз на кучу (~25 мс)
+function wholeReach(P){
+  if (P.reach) return P.reach;
+  const r = wholeBotRun(1, 7, 0, null, true), reach = new Float32Array(P.N);
+  r.S.order.forEach((i, n) => { reach[i] = n / P.N; });
+  return (P.reach = reach);
+}
+// половинки джокеров и кусочки золотых — карты стога по полосам глубины (CFG.WHOLE.JOKER_BANDS, CFG.GOLD): какие именно — сид стога
+function wholePlace(S, R){
+  const P = S.P, reach = wholeReach(P), N = P.N, W = CFG.WHOLE, GD = CFG.GOLD, used = new Uint8Array(N);
+  const band = (a, b) => { const out = []; for (let i = 0; i < N; i++) if (!used[i] && reach[i] >= a && reach[i] < b) out.push(i); return out; };
+  const pick = (list) => list.length ? list[Math.floor(R() * list.length)] : -1;
+  for (let k = 0; k < CFG.JOKERS.length; k++){
+    const [a, b] = W.JOKER_BANDS[k], list = band(a, b); let x = pick(list), y = -1;
+    for (let n = 0; n < 60 && y < 0; n++){ const c = pick(list); if (c >= 0 && c !== x && Math.hypot(P.x[c] - P.x[x], P.y[c] - P.y[x]) >= W.JOKER_SPREAD * P.rad) y = c; }
+    if (y < 0) y = pick(list.filter(i => i !== x));
+    const cards = [x, y].filter(i => i >= 0); cards.forEach((i, side) => { used[i] = 1; S.face[i] = FACE_HALF0 + 2 * k + side; });
+    S.jok.push({ k, cards, got: 0, sides: [0, 0] });
+  }
+  const ids = []; while (ids.length < GD.PER_PILE){ const id = Math.floor(R() * 52); if (!ids.includes(id)) ids.push(id); }
+  ids.forEach((id, g) => {
+    const a0 = g / GD.PER_PILE + 0.02, b0 = (g + GD.BAND) / GD.PER_PILE, step = (b0 - a0) / GD.PIECES, cards = [];
+    for (let q = 0; q < GD.PIECES; q++){
+      const a = g === 0 && q === 0 ? 0.005 : a0 + step * q, b = g === 0 && q === 0 ? GD.FIRST_AT : a0 + step * (q + 1);
+      let i = pick(band(a, b)); if (i < 0) i = pick(band(a0, b0)); if (i < 0) continue;
+      used[i] = 1; S.face[i] = FACE_PIECE0 + GD.PIECES * g + q; cards.push(i);
+    }
+    S.golds.push({ id, cards, got: 0 });
+  });
+}
+// старт стога: seed — раскладка лиц и особых карт; coll — коллекция золотых карт (id), собранная раньше (выходят из колоды);
+// plain — простые случайные лица, без особых карт и цепочки (опорный прогон для wholeReach)
+function wholeStart(seed, coll, plain){
+  const P = wholePile(), R = mulberry32(seed), N = P.N;
+  const S = { k: 0, whole: true, seed, P, gold: -1, R, face: new Int16Array(N).fill(FACE_NONE), alive: new Uint8Array(N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)), zone: new Uint8Array(N),
+    top: 0, streak: 0, best: 0, taps: 0, draws: 0, removed: 0, found: false, won: false, plain: !!plain, order: [],
+    goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0 };
+  if (!plain) wholePlace(S, R);
   for (const j of nearby(P, 0, 0, CFG.WHOLE.ZONE0)) S.zone[j] = 1;
-  zoneEnsure(S, []); return S;
+  zoneEnsure(S, []);
+  for (let i = 0; i < N; i++) if (S.zone[i] && !S.cover[i] && S.face[i] === FACE_NONE) S.face[i] = Math.floor(R() * 52);   // открытые в яме на старте — лицом сразу
+  const inz = []; for (let i = 0; i < N; i++) if (S.zone[i] && !S.cover[i] && S.face[i] >= 0 && S.face[i] < 52) inz.push(i);
+  const c = inz.length ? inz[Math.floor(R() * inz.length)] : -1;                                                 // стартовая карта — ±1 к открытой в яме
+  S.top = c >= 0 ? (rk(S.face[c]) + (R() < 0.5 ? 1 : 12)) % 13 + 13 * Math.floor(R() * 4) : Math.floor(R() * 52);
+  S.goal = plain ? 1e9 : wholeGoal(S);
+  return S;
+}
+// лица карт, вошедших в яму открытыми (открылись от снятия или яма доросла до них): серия короче цели — одна из них ±1 к текущей,
+// остальные — «тёплый пул» (ранг текущей ± POOL: через шаг-другой станут ±1); серия дошла до цели — все далеко от текущей (± BREAK).
+// Карты вне ямы лица не получают (лежат рубашкой), пока яма до них не дорастёт — переворот честный, подтасовки не видно
+function wholeFaces(S, cards){
+  const r0 = rk(S.top), C = CFG.WHOLE.CHAIN, help = S.streak < S.goal, list = cards.filter(j => S.zone[j] && S.alive[j] && !S.cover[j] && S.face[j] === FACE_NONE);
+  if (!list.length) return;
+  const suit = () => 13 * Math.floor(S.R() * 4);
+  if (S.plain){ for (const j of list) S.face[j] = Math.floor(S.R() * 52); return; }
+  // сторона помощи (+1 или −1): та, куда цепочке есть куда идти дальше — в яме больше открытых карт ранга текущей ± 2 (после шага они
+  // станут ±1); пул — в ту же сторону (лесенка 7 → 8 → 9 на открывшихся картах)
+  // Открытый в яме кусочек золотой карты — цепочка ведётся к его рангу (ближней стороной): кусочек не ждёт, пока ранг случайно совпадёт
+  let up = 0, dn = 0, pd = 7, pdir = 0;
+  if (help) for (let i = 0; i < S.P.N; i++) if (S.zone[i] && S.alive[i] && !S.cover[i] && S.face[i] >= 0){
+    const f = S.face[i]; if (wholeIsHalf(f)) continue; const d = (wholeRank(S, i) - r0 + 13) % 13;
+    if (wholeIsPiece(f)){ const dd = Math.min(d, 13 - d); if (dd > 1 && dd < pd){ pd = dd; pdir = d <= 6 ? 1 : -1; } }
+    else if (d === 2) up++; else if (d === 11) dn++; }
+  const dir = pdir || (up === dn ? (S.R() < 0.5 ? 1 : -1) : up > dn ? 1 : -1), h = help ? list[Math.floor(S.R() * list.length)] : -1;
+  const step = (lim) => { const d = lim[0] + Math.floor(S.R() * (lim[1] - lim[0] + 1)); return help ? (13 + dir * d) % 13 : (S.R() < 0.5 ? d : 13 - d); };
+  for (const j of list) S.face[j] = j === h ? (r0 + 13 + dir) % 13 + suit() : (r0 + step(help ? C.POOL : C.BREAK)) % 13 + suit();
+}
+// снять карту i «Одного стога»: открытая, в яме и ±1 к текущей (кусочек — по рангу своей золотой; половинка — любым тапом).
+// how: 'wild' — способность «любая карта» (ранг не проверяется, ход обычный), 'sweep' — «метла» (ранг не проверяется, текущая
+// и серия не меняются). → { ok, why, opened, done, half, joker, piece, pieceN, assembled }: half/joker — номер джокера (взята
+// половинка / собран), piece/pieceN — золотая g и сколько её кусочков, assembled — id собранной золотой карты
+function wholeTap(S, i, how){
+  if (!S.alive[i]) return { ok: false, why: 'gone' };
+  if (S.cover[i] > 0) return { ok: false, why: 'covered' };
+  if (!S.zone[i]) return { ok: false, why: 'far' };
+  const f = S.face[i], P = S.P, res = { ok: true, opened: [], dust: 0, done: false }, free = how === 'wild' || how === 'sweep', sweep = how === 'sweep';
+  if (wholeIsHalf(f)){ const k = (f - FACE_HALF0) >> 1, J = S.jok[k]; J.got++; J.sides[(f - FACE_HALF0) & 1] = 1; res.half = k; if (J.got === 2) res.joker = k; }   // текущая и серия не меняются
+  else if (wholeIsPiece(f)){ const g = (f - FACE_PIECE0) / CFG.GOLD.PIECES | 0, GD = S.golds[g]; if (!free && !ok(rk(S.top), rk(GD.id))) return { ok: false, why: 'rank' };
+    if (!sweep) S.streak++; GD.got++; res.piece = g; res.pieceN = GD.got; if (GD.got === CFG.GOLD.PIECES){ res.assembled = GD.id; S.coll.push(GD.id); } }   // текущая прежняя: кусочек не блокирует цепочку
+  else { if (!free && !ok(rk(S.top), rk(f))) return { ok: false, why: 'rank' }; if (!sweep){ S.top = f; S.streak++; } }
+  if (S.streak > S.best) S.best = S.streak;
+  S.alive[i] = 0; S.removed++; S.taps++; S.order.push(i);
+  const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }
+  const fresh = zoneGrow(S, i); zoneEnsure(S, fresh);
+  res.opened = [...new Set([...opened, ...fresh])].filter(j => S.alive[j] && !S.cover[j] && S.zone[j]);
+  wholeFaces(S, res.opened);
+  if (S.removed === P.N) S.won = true; res.done = S.won;
+  return res;
+}
+// добор «Одного стога»: новая цепочка и новая цель. Из коллекции золотых с вероятностью min(DRAW_P_MAX, DRAW_P_EACH × собранных)
+// выходит золотая (по кругу, первая, чей ранг не текущий и подходит к открытой в кадре near); иначе обычная карта не ранга
+// текущей, и если в кадре ей нечего снять — с вероятностью WHOLE.HELP ±1 к случайной из кадра. → true, если вышла золотая
+function wholeDraw(S, near){
+  const r0 = rk(S.top), GD = CFG.GOLD, fitsNear = (r) => !near || !near.length || near.some(i => wholeRank(S, i) >= 0 && ok(r, wholeRank(S, i)));
+  let top = -1, gold = false;
+  if (S.coll.length && S.R() < Math.min(GD.DRAW_P_MAX, GD.DRAW_P_EACH * S.coll.length)){
+    for (let n = 0; n < S.coll.length && top < 0; n++){ const id = S.coll[(S.goldNext + n) % S.coll.length]; if (rk(id) !== r0 && fitsNear(rk(id))){ top = id; gold = true; S.goldNext = (S.goldNext + n + 1) % S.coll.length; } }
+  }
+  if (top < 0){
+    do top = Math.floor(S.R() * 52); while (rk(top) === r0);
+    if (near && near.length && S.R() < CFG.WHOLE.HELP && !fitsNear(rk(top))){
+      // под какую карту кадра подстроиться: у которой есть продолжение — в кадре карта её ранга ±1 или под ней карта, что откроется
+      const cand = near.filter(i => wholeRank(S, i) >= 0); let best = -1, bs = -1;
+      for (const i of cand){ const r = wholeRank(S, i); let sc = S.R() * 0.5; for (const j of cand) if (j !== i && ok(r, wholeRank(S, j))) sc += 1; for (const j of S.P.below[i]) if (S.alive[j] && S.cover[j] === 1) sc += 1; if (sc > bs){ bs = sc; best = i; } }
+      if (best >= 0){ const f = wholeRank(S, best); let nr = (f + (S.R() < 0.5 ? 1 : 12)) % 13;
+        if (nr === r0) nr = (2 * f - nr + 13) % 13; if (nr !== r0) top = nr + 13 * Math.floor(S.R() * 4); }
+    }
+  }
+  S.top = top; S.goldTop = gold; S.goldId = gold ? top : -1; S.streak = 0; S.taps++; S.draws++; S.goal = wholeGoal(S);
+  return gold;
+}
+// «магнит» (способность): текущая карта меняется на подходящую к открытой в кадре near (с продолжением — как помощь колоды),
+// серия не рвётся, золотая на отбое — нет. → новая текущая или −1, если в кадре нечего снять
+function wholeMagnet(S, near){
+  const r0 = rk(S.top), cand = (near || []).filter(i => wholeRank(S, i) >= 0); let best = -1, bs = -1;
+  for (const i of cand){ const r = wholeRank(S, i); let sc = S.R() * 0.5; for (const j of cand) if (j !== i && ok(r, wholeRank(S, j))) sc += 1; for (const j of S.P.below[i]) if (S.alive[j] && S.cover[j] === 1) sc += 1; if (sc > bs){ bs = sc; best = i; } }
+  if (best < 0) return -1;
+  const f = wholeRank(S, best); let nr = (f + (S.R() < 0.5 ? 1 : 12)) % 13; if (nr === r0) nr = (2 * f - nr + 13) % 13;
+  S.top = nr + 13 * Math.floor(S.R() * 4); S.goldTop = false; return S.top;
+}
+// восстановить стог из сейва: лица (все решённые), снятые карты (без проверки рангов; половинки и кусочки считаются), текущая,
+// серия и цель. Яма — вокруг снятых. sv — { faces, removed (в порядке снятия), top, streak, best, goal, goldTop, goldNext }
+function wholeRestore(S, sv){
+  const P = S.P;
+  if (sv.faces && sv.faces.length === P.N) for (let i = 0; i < P.N; i++) if (sv.faces[i] !== FACE_NONE) S.face[i] = sv.faces[i];
+  for (const i of sv.removed || []){                 // в порядке снятия: яма растёт так же, как росла в игре
+    if (i < 0 || i >= P.N || !S.alive[i]) continue;
+    S.alive[i] = 0; S.removed++; S.order.push(i); for (const j of P.below[i]) if (S.alive[j]) S.cover[j]--;
+    const f = S.face[i]; if (wholeIsHalf(f)){ const J = S.jok[(f - FACE_HALF0) >> 1]; J.got++; J.sides[(f - FACE_HALF0) & 1] = 1; } else if (wholeIsPiece(f)) S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].got++;
+    zoneEnsure(S, zoneGrow(S, i));
+  }
+  for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i] && S.face[i] === FACE_NONE) S.face[i] = Math.floor(S.R() * 52);   // открытая в яме без лица (сейв старой схемы)
+  if (sv.top !== undefined && sv.top >= 0) S.top = sv.top;
+  S.streak = sv.streak || 0; S.best = sv.best || 0; S.goal = sv.goal || wholeGoal(S); S.goldTop = !!sv.goldTop; S.goldId = S.goldTop && !S.streak ? S.top : -1; S.goldNext = sv.goldNext || 0;
+  if (S.removed === P.N) S.won = true;
+  return S;
 }
 // яма растёт вокруг снятой i → новые карты ямы
 function zoneGrow(S, i){ const P = S.P, out = []; for (const j of nearby(P, P.x[i], P.y[i], CFG.WHOLE.GROW)) if (!S.zone[j]){ S.zone[j] = 1; out.push(j); } return out; }
@@ -1169,23 +1350,28 @@ function zoneEnsure(S, out){
   let b = -1, bd = 1e9; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - cx, P.y[i] - cy); if (d < bd){ bd = d; b = i; } }
   if (b < 0) return; S.zone[b] = 1; out.push(b); out.push(...zoneGrow(S, b));
 }
-// бот «Одного стога» (сим): играет в окне радиуса view (высот карты) у последней снятой, как человек в кадре; окно опустело —
-// переезжает к ближайшей открытой. → { taps, draws, moves, jumps, won }
-function wholeBotRun(seed, view, maxTaps){
-  const S = wholeStart(seed), P = S.P, open = new Set(); let fx = 0, fy = 0, jumps = 0, sumOpen = 0, nOpen = 0;
+// бот «Одного стога» (сим): играет в окне радиуса view (высот карты) у последней снятой, как человек в кадре; половинку в кадре
+// берёт сразу, из подходящих — ближайшую; окно опустело — переезжает к ближайшей открытой; хода нет — колода.
+// → { taps, draws, moves, jumps, won, open, chains (длины серий), jokAt / goldAt (доля стога, когда собраны), goldDraws, S }
+function wholeBotRun(seed, view, maxTaps, coll, plain){
+  const S = wholeStart(seed, coll, plain), P = S.P, open = new Set(); let fx = 0, fy = 0, jumps = 0, sumOpen = 0, nOpen = 0, goldDraws = 0;
+  const chains = [], jokAt = [], goldAt = [];
   for (let i = 0; i < P.N; i++) if (!S.cover[i] && S.zone[i]) open.add(i);
   while (!S.won && S.taps < (maxTaps || 60000)){
     sumOpen += open.size; nOpen++;
-    let near = []; for (const i of open) if (Math.hypot(P.x[i] - fx, P.y[i] - fy) <= view) near.push(i);
+    const near = []; for (const i of open) if (Math.hypot(P.x[i] - fx, P.y[i] - fy) <= view) near.push(i);
     if (!near.length){ let b = -1, bd = 1e9; for (const i of open){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; b = i; } } fx = P.x[b]; fy = P.y[b]; jumps++; continue; }
-    const pl = near.filter(i => ok(rk(S.top), rk(S.face[i])));
-    if (!pl.length){ searchDraw(S, near); continue; }
-    let pick = pl[0], bd = 1e9; for (const i of pl){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; pick = i; } }
-    const r = searchTap(S, pick); open.delete(pick); for (const j of r.opened) open.add(j); fx = P.x[pick]; fy = P.y[pick];
+    const pl = near.filter(i => wholeFits(S, i));
+    if (!pl.length){ chains.push(S.streak); if (wholeDraw(S, near)) goldDraws++; continue; }
+    let pick = pl.find(i => wholeIsHalf(S.face[i])), bd = 1e9; if (pick === undefined) pick = pl.find(i => wholeIsPiece(S.face[i]));   // половинка и кусочек — первыми (как человек: они заметные)
+    if (pick === undefined) for (const i of pl){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; pick = i; } }
+    const r = wholeTap(S, pick); open.delete(pick); for (const j of r.opened) open.add(j); fx = P.x[pick]; fy = P.y[pick];
+    if (r.joker !== undefined) jokAt.push(S.removed / P.N); if (r.assembled !== undefined) goldAt.push(S.removed / P.N);
   }
-  return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won, open: sumOpen / Math.max(1, nOpen) };
+  chains.push(S.streak);
+  return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won, open: sumOpen / Math.max(1, nOpen), chains, jokAt, goldAt, goldDraws, best: S.best, S };
 }
-function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (!S.zone || S.zone[i]) && (i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
+function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (!S.zone || S.zone[i]) && (S.whole ? wholeFits(S, i) : i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
 // бот поиска (сим): ideal — знает, где туз; dust — копает у самой сильной пыли (как человек по подсказке); random — куда попало
 function searchBotRun(k, bot, seed, maxTaps){
   const S = searchStart(k, seed), P = S.P, R = mulberry32(seed * 31 + 7), open = new Set();
@@ -1251,8 +1437,8 @@ const G = {
   aliveNow: null,          // Uint8Array: живые карты стога сейчас (без снятых в прошлых ямах и в текущей)
   pitOn: false,            // стиль ямы включён: закрытые рубашкой, остальной стог тусклый
   sparks: new Set(),       // узлы ямы с искрой-монетой
-  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, music: true, removed: {}, metrics: {}, plus5Free: {}, endless: { best: 0, runs: 0, aces: 0, pile: null, piles: 0, jokers: 0, charges: {} }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} }, whole: { runs: 0, wins: 0, seed: 0, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0 },
-    seen: {} }, loadSave()),   // seen — разовые подсказки и интро режимов: endless, search, endlessAce, hold, cover1, dust, glint, zoom
+  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, music: true, removed: {}, metrics: {}, plus5Free: {}, endless: { best: 0, runs: 0, aces: 0, pile: null, piles: 0, jokers: 0, charges: {} }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} }, whole: { runs: 0, wins: 0, seed: 0, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0 }, gold: { cards: [] },
+    seen: {} }, loadSave(), { gold: Object.assign({ cards: [] }, (loadSave().gold || {})) }),   // seen — разовые подсказки и интро режимов: endless, search, endlessAce, hold, cover1, dust, glint, zoom
   mode: 'campaign',       // campaign — 10 ям теста; endless — бесконечный стог; search — «Иголка в стоге»
   run: null,              // забег бесконечного стога (endlessStart): свой живой стог, тузы, снятые карты
   srch: null,             // поиск «Иголки в стоге» (searchStart): куча, туз, лица, живые карты, счёт
@@ -1298,6 +1484,9 @@ const G = {
   envPop: null,           // окружение: { t0, dir } — вырастает (1) / прячется (−1), null — стоит
   pileH: 1,               // высота стога ×K (куча оседает со счётом, pileHTarget; в placeCamera — к ys и точке взгляда)
   wildArmed: false, halfWinAt: -1e9, jokerType: null,   // джокеры: «Любая карта» взведена; взята половинка; собранный (для надписи)
+  wholeTut: 0, wholeMile: 0,   // «Один стог»: идёт урок первых ходов; последняя отмеченная веха (каждые WHOLE.MILE)
+  abilityPop: {},          // кнопки способностей: когда появилась (пружинка) — по id джокера
+  chainZoomK: 1, heatK: 0, heatPt: { x: 0, z: 0 }, labelSparkAt: -1e9, chainBreakAt: -1e9,   // фил серии: наезд камеры, сила «стог горит» и его центр, искры подписи, момент срыва
   pileIntro: null, pileMove: null, jokerWinAt: -1e9,   // кучи: табличка новой кучи { t0, k, N, left }; переезд к следующей { P, off, mesh, run, L }; взят джокер
 };
 
@@ -1438,10 +1627,12 @@ const Audio = {
   // ход: только шорох колоды и мягкий шлепок на отбое (Андрей 01.11: струна серии звенит и быстро надоедает) — серия слышна
   // тем, что шорох чуть выше и плотнее; рубежи 5/10/15 — тихое арпеджио
   play(streak){
-    const s = Math.max(1, streak);
-    this.riffle(CFG.FX.RIFFLE_VOL, 0, 1 + 0.012 * Math.min(s, 10));
+    const s = Math.max(1, streak), FX = CFG.FX, rate = 1 + 0.012 * Math.min(s, FX.SOUND_STREAK_MAX);
+    this.riffle(FX.RIFFLE_VOL, 0, rate);
+    if (s >= FX.SOUND_OCTAVE_AT) this.riffle(FX.RIFFLE_VOL * Math.min(0.6, 0.25 + 0.035 * (s - FX.SOUND_OCTAVE_AT)), 0.012, rate * 2);   // второй голос на октаву выше, громче с серией
     log('sound', 'play', 'streak=' + streak);
-    if (streakMile(s)){ [0, 4, 7].forEach((d, i) => this.bell(523.3 * 2 ** (d / 12), 0.03, 0.6, i * 0.07)); this.burst({ dur: 0.2, vol: 0.025, type: 'bandpass', f0: 800, f1: 2400, q: 1.2, att: 0.06 }); log('sound', 'milestone', 'streak=' + s); }
+    if (streakMile(s)){ const up = 2 ** (Math.min(5, s / FX.STREAK_MILE - 1) * 2 / 12);   // рубежи: трезвучие, каждый следующий рубеж на тон выше
+      [0, 4, 7].forEach((d, i) => this.bell(523.3 * up * 2 ** (d / 12), 0.03, 0.6, i * 0.07)); this.burst({ dur: 0.2, vol: 0.025, type: 'bandpass', f0: 800, f1: 2400, q: 1.2, att: 0.06 }); log('sound', 'milestone', 'streak=' + s); }
   },
   land(amp, at){ this.burst({ dur: 0.045, vol: 0.08 * amp, type: 'lowpass', f0: 1100, f1: 380, att: 0.006, at }); log('sound', 'land'); },   // мягкий бумажный шлепок на отбой
   flip(k){ const FX = CFG.FX, f0 = 3400 * (0.9 + 0.2 * this.rnd());   // k-я карта волны переворотов (тот же шаг, что у анимации): шелест, не щелчок
@@ -1485,6 +1676,9 @@ const Audio = {
     this.WIN.forEach((f, i) => this.pluck(f, 0.26, at + i * 0.08)); this.bell(1568, 0.12, 1.6, at + 0.36); this.bell(2093, 0.08, 1.4, at + 0.5);
     this.bus = b; log('sound', 'win');
   },
+  piece(n){ this.bell(1046.5 * 2 ** ((n - 1) * 2 / 12), 0.06, 0.7); this.bell(1568 * 2 ** ((n - 1) * 2 / 12), 0.04, 0.6, 0.06); log('sound', 'piece', 'n=' + n); },   // кусочек золотой: пара колокольчиков, каждый следующий выше
+  goldAsm(at){ [0, 4, 7].forEach((d, i) => this.bell(1046.5 * 2 ** (d / 12), 0.07, 1.3, (at || 0) + 0.5 + i * 0.07)); this.bell(2093, 0.05, 1.2, (at || 0) + 0.75); this.burst({ dur: 0.9, vol: 0.05, type: 'bandpass', f0: 1200, f1: 5000, att: 0.3, at: (at || 0) + 0.45 }); log('sound', 'gold.asm'); },   // золотая собрана: трезвучие-колокольчики и шиммер
+  goldDraw(){ this.bell(1318.5, 0.05, 0.8); this.bell(1975.5, 0.04, 0.8, 0.09); log('sound', 'gold.draw'); },   // золотая вышла из колоды
   joker(){ [0, 4, 7, 12, 16].forEach((d, i) => this.bell(784 * 2 ** (d / 12), 0.05, 1.1, 0.12 + i * 0.09)); this.burst({ dur: 1.2, vol: 0.05, type: 'bandpass', f0: 900, f1: 4000, att: 0.4, at: 0.1 }); log('sound', 'joker'); },   // радужный джокер взят
   settle(k){ this.tok(95, 60, 0.32, 0.08 + 0.08 * k); this.burst({ dur: 0.6, vol: 0.04 + 0.03 * k, type: 'lowpass', f0: 600, f1: 140, att: 0.05 }); log('sound', 'settle', 'k=' + k.toFixed(2)); },   // стог осел
   rise(){ this.burst({ dur: 0.7, vol: 0.05, type: 'bandpass', q: 1.4, f0: 260, f1: 1300, att: 0.5 }); log('sound', 'rise'); },   // подъём на общий план между ямами
@@ -1492,7 +1686,7 @@ const Audio = {
   shrink(at){ [0, 0.14, 0.3, 0.5].forEach((d, i) => this.riffle(CFG.FX.RIFFLE_VOL * (0.8 - 0.15 * i), at + d)); this.tok(150, 95, 0.12, 0.08, at + 0.8); log('sound', 'shrink'); },
   sigh(at){ this.burst({ dur: 0.9, vol: 0.08, type: 'lowpass', f0: 900, f1: 180, att: 0.3, at }); log('sound', 'sigh'); },   // выдох — вместе с волной по стогу
 };
-const streakMile = (s) => s > 0 && s % CFG.FX.STREAK_MILE === 0 && s <= 3 * CFG.FX.STREAK_MILE;   // рубеж серии 5 / 10 / 15 (как у дорожки)
+const streakMile = (s) => s > 0 && s % CFG.FX.STREAK_MILE === 0 && s <= CFG.FX.STREAK_MILES * CFG.FX.STREAK_MILE;   // рубеж серии 5 / 10 / 15 … 30 (как у дорожки)
 // хаптика: buzz(вид) по таблице CFG.HAPTIC, только после первого касания; в Telegram (если его скрипт уже на странице) — HapticFeedback
 let touched = false, buzzPayAt = -1e9;
 const TG_HAPTIC = { move: 'light', deal: 'light', closed: 'light', payout: 'light', wrong: 'medium', milestone: 'medium', diveEnd: 'medium', aceOpen: 'success', aceWin: 'success' };
@@ -1529,8 +1723,14 @@ function buzzSlide(times){
 // 0..51 — лица, 52 — рубашка, 53..104 — дальние лица (LOD, ранг бледнее, без масти), 105 — дальняя рубашка (без решётки),
 // 106/107 — золотой туз. Ячейки залиты до края, контуров нет: скругление делает геометрия, обводку — шейдер (на 2D — drawCell).
 // ---------------------------------------------------------------------------
-const ATLAS_PX = 2048, CELL_W = 160, CELL_H = 224, COLS = 12;
+const ATLAS_W = 2048, ATLAS_H = 2048, CELL_W = 146, CELL_H = 204, COLS = 14;   // 14 × 10 ячеек = 140 (было 12 × 9 по 160×224 = 108: под половинки и
+                          // кусочки нужны ещё 22). Атлас остался 2048² (степень двойки): 2048×2688 давал в SwiftShader −15% к/с, 2048×4096 — вдвое
+                          // медленнее; ячейка 146×204 — те же 0,716 ширины на высоту, ранг на экране ≤ 96 px всё равно берётся с мипа ≥ 1
 const CELL_BACK = 52, CELL_FAR0 = 53, CELL_BACK_FAR = 105, CELL_GOLD = 106, CELL_GOLD_FAR = 107;
+// «Один стог»: 108..113 — половинки джокеров (3 вида × левая/правая, рисуются при сборке атласа), 114..129 — кусочки золотых карт
+// (4 карты × 4 четверти, рисуются на старте стога — paintPieces: ранги и масти у каждого стога свои). Дальней ячейки у них нет —
+// та же (для мелких карт на экране читается достаточно: золото и рваный край)
+const CELL_HALF0 = 108, CELL_PIECE0 = 114;
 const FONT = 'Nunito, system-ui, -apple-system, Roboto, sans-serif';
 function css(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 let PAL = null;
@@ -1606,7 +1806,7 @@ function drawBack(c, x, y, w, h, far){
 }
 // Золотой туз — металл: диагональные полосы градиента до края, тёмный кант, двойная рамка, звёздочки в углах,
 // «A» гравировкой (блик выше, подложка ниже — обе заливкой под основной) и звезда внизу. Дальний — без рамок и звёздочек, кант толще, «A» крупнее.
-function drawGold(c, x, y, w, h, far){
+function goldBase(c, x, y, w, h, far){           // золото и рамки без знака: туз, золотая карта коллекции
   const g = c.createLinearGradient(x, y, x + w, y + h);
   for (const [o, col] of [[0, '#fff3c4'], [0.18, '#ffd75e'], [0.38, '#f0a92b'], [0.52, '#ffe28f'], [0.7, '#d98c1c'], [0.88, '#9c5a10'], [1, '#e7b24a']]) g.addColorStop(o, col);
   c.fillStyle = g; c.fillRect(x, y, w, h);
@@ -1616,6 +1816,9 @@ function drawGold(c, x, y, w, h, far){
     c.lineWidth = 1.5; c.strokeStyle = 'rgba(120,66,8,.6)'; rr(c, x + 19, y + 19, w - 38, h - 38, 7); c.stroke();
     c.fillStyle = '#6b3a0c'; for (const [sx, sy] of [[x + 30, y + 32], [x + w - 30, y + 32], [x + 30, y + h - 32], [x + w - 30, y + h - 32]]){ star4(c, sx, sy, 8, 2.6); c.fill(); }
   }
+}
+function drawGold(c, x, y, w, h, far){
+  goldBase(c, x, y, w, h, far);
   const ax = x + w / 2, ab = y + h * (far ? 0.66 : 0.6), as = Math.round(h * (far ? 0.72 : 0.6)), aw = w * 0.8;
   // только заливки: у вариативного Nunito контуры глифа перекрываются, и strokeText провёл бы светлые линии сквозь тело буквы.
   // Основная заливка последней закрывает блик и подложку — остаются светлый край сверху и тёмный снизу.
@@ -1673,6 +1876,57 @@ function drawHalf(c, x, y, w, h, far, type){
   drawJoker(c, x, y, w, h, far, type); c.restore();
   c.strokeStyle = 'rgba(255,255,255,.85)'; c.lineWidth = far ? 4 : 2.5; c.beginPath(); for (let i = 0; i <= 9; i++) c.lineTo(x + w * (i % 2 ? 0.56 : 0.47), y + h * i / 9); c.stroke();
 }
+// золотая карта обычной колоды (id) — из кусочков «Одного стога»: золото туза, ранг гравировкой и масть тёмным золотом
+function drawGoldCard(c, x, y, w, h, far, id){
+  goldBase(c, x, y, w, h, far);
+  const r = rk(id), su = Math.floor(id / 13) % 4, ax = x + w / 2, ab = y + h * (far ? 0.66 : 0.58), as = Math.round(h * (far ? 0.72 : 0.56)), aw = w * 0.8, ten = r === 9, ul = r === 5 || r === 8;
+  c.fillStyle = 'rgba(255,240,190,.55)'; drawRank(c, RANKS[r], ax, ab - 1.5, as, aw, ul, ten);
+  c.fillStyle = '#5a3008'; drawRank(c, RANKS[r], ax, ab + 3, as, aw, ul, ten);
+  c.fillStyle = '#6b3a0c'; drawRank(c, RANKS[r], ax, ab, as, aw, ul, ten);
+  if (!far){ c.fillStyle = '#6b3a0c'; drawSuit(c, su, x + w / 2, y + h * 0.8, h * 0.15); }
+}
+// зигзаг «рваного края» от (ax, ay) к (bx, by): n зубцов амплитудой amp поперёк
+function tearPath(c, ax, ay, bx, by, n, amp){ const dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L; for (let i = 1; i <= n; i++){ const k = i / n, w = i === n ? 0 : (i % 2 ? amp : -amp); c.lineTo(ax + dx * k + nx * w, ay + dy * k + ny * w); } }
+// половинка джокера как карта стога: бумага, в ней половина картинки джокера (side 0 — левая, 1 — правая) с рваным краем,
+// недостающая половина — пунктиром
+function drawHalfCard(c, x, y, w, h, far, type, side){
+  const g = c.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, '#f1e8d2'); g.addColorStop(1, '#dfd3b5'); c.fillStyle = g; c.fillRect(x, y, w, h);
+  c.strokeStyle = 'rgba(90,70,40,.4)'; c.lineWidth = far ? 3 : 1.5; c.setLineDash(far ? [10, 8] : [6, 5]); rr(c, x + 12, y + 12, w - 24, h - 24, 10); c.stroke(); c.setLineDash([]);
+  const mid = x + w / 2, amp = w * 0.045;
+  c.save(); c.beginPath();
+  if (side === 0){ c.moveTo(x, y); c.lineTo(mid, y); tearPath(c, mid, y, mid, y + h, 11, amp); c.lineTo(x, y + h); }
+  else { c.moveTo(x + w, y); c.lineTo(mid, y); tearPath(c, mid, y, mid, y + h, 11, amp); c.lineTo(x + w, y + h); }
+  c.closePath(); c.clip(); drawJoker(c, x, y, w, h, far, type); c.restore();
+  c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = far ? 4 : 2.5; c.beginPath(); c.moveTo(mid, y); tearPath(c, mid, y, mid, y + h, 11, amp); c.stroke();
+  if (!far){ c.fillStyle = 'rgba(90,70,40,.5)'; c.font = '900 26px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('½', side === 0 ? x + w * 0.75 : x + w * 0.25, y + h * 0.5); }
+}
+// кусочек золотой карты id, четверть q (0 верх-лево, 1 верх-право, 2 низ-лево, 3 низ-право): бумага, пунктир целой карты,
+// в своей четверти — кусок золотой карты с рваными краями, номер четверти в уголке
+function drawPiece(c, x, y, w, h, far, id, q){
+  const g = c.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, '#f1e8d2'); g.addColorStop(1, '#dfd3b5'); c.fillStyle = g; c.fillRect(x, y, w, h);
+  c.strokeStyle = 'rgba(90,70,40,.4)'; c.lineWidth = far ? 3 : 1.5; c.setLineDash(far ? [10, 8] : [6, 5]); rr(c, x + 12, y + 12, w - 24, h - 24, 10); c.stroke(); c.setLineDash([]);
+  const qx = q % 2, qy = q >> 1, ox = x + qx * w, oy = y + qy * h, mx = x + w / 2, my = y + h / 2, amp = w * 0.04;
+  const edge = () => { c.moveTo(ox, oy); c.lineTo(mx, oy); tearPath(c, mx, oy, mx, my, 6, amp); tearPath(c, mx, my, ox, my, 4, amp); };   // наружный угол → по верху к середине → рваный край вниз и к краю
+  c.save(); c.beginPath(); edge(); c.closePath(); c.clip(); drawGoldCard(c, x, y, w, h, far, id); c.restore();
+  c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = far ? 4 : 2.5; c.beginPath(); c.moveTo(mx, oy); tearPath(c, mx, oy, mx, my, 6, amp); tearPath(c, mx, my, ox, my, 4, amp); c.stroke();
+  if (!far){ const bx = x + (qx ? w * 0.25 : w * 0.75), by = y + (qy ? h * 0.3 : h * 0.7);   // номер — в пустой четверти по диагонали
+    c.fillStyle = 'rgba(90,70,40,.5)'; c.font = '900 24px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(q + 1) + '/' + CFG.GOLD.PIECES, bx, by); }
+}
+// атлас изменился (ячейки золота, кусочков): текстура и копия для 2D — заново
+function atlasChanged(){
+  if (S.mat) S.mat.uniforms.uMap.value.needsUpdate = true;
+  if (S.atlasBmp){ const old = S.atlasBmp; S.atlasBmp = null; createImageBitmap(S.atlas).then(b => { S.atlasBmp = b; if (old.close) old.close(); }).catch(() => {}); }   // пока копия строится, 2D рисует прямо с атласа
+}
+// кусочки золотых карт стога Z — в ячейки CELL_PIECE0… (на старте стога)
+function paintPieces(Z){
+  if (!S.atlas || !Z || !Z.golds) return; const c = S.atlas.getContext('2d');
+  Z.golds.forEach((g, gi) => { for (let q = 0; q < CFG.GOLD.PIECES; q++){ const [x, y] = cellXY(CELL_PIECE0 + CFG.GOLD.PIECES * gi + q); c.save(); c.beginPath(); c.rect(x, y, CELL_W, CELL_H); c.clip(); drawPiece(c, x, y, CELL_W, CELL_H, false, g.id, q); c.restore(); } });
+  atlasChanged(); log('event', 'gold.pieces', Z.golds.map(g => RANKS[rk(g.id)] + '♠♥♦♣'[Math.floor(g.id / 13)]).join(' '));
+}
+// золотая карта коллекции на 2D (слот, отбой, колода, сборка): холст на id, рисуется один раз
+const GCANVAS = {};
+function goldCanvas(id){ if (GCANVAS[id]) return GCANVAS[id]; const cv = document.createElement('canvas'); cv.width = CELL_W; cv.height = CELL_H; const g = cv.getContext('2d');
+  g.save(); rr(g, 0, 0, CELL_W, CELL_H, 14); g.clip(); drawGoldCard(g, 0, 0, CELL_W, CELL_H, false, id); g.restore(); return (GCANVAS[id] = cv); }
 let goldSkin = 'gold';
 function setGoldSkin(kind){
   if (goldSkin === kind || !S.atlas) return; goldSkin = kind;
@@ -1680,17 +1934,17 @@ function setGoldSkin(kind){
   for (const [id, far] of [[CELL_GOLD, false], [CELL_GOLD_FAR, true]]){
     const [x, y] = cellXY(id); c.save(); c.beginPath(); c.rect(x, y, CELL_W, CELL_H); c.clip(); c.fillStyle = '#efe6d0'; c.fillRect(x, y, CELL_W, CELL_H); f(c, x, y, CELL_W, CELL_H, far, type); c.restore();
   }
-  if (S.mat){ S.mat.uniforms.uMap.value.needsUpdate = true; S.mat.uniforms.uJoker.value = kn === 'joker' ? 1 : 0; }
-  if (S.atlasBmp){ const old = S.atlasBmp; S.atlasBmp = null; createImageBitmap(S.atlas).then(b => { S.atlasBmp = b; if (old.close) old.close(); }).catch(() => {}); }   // пока копия строится, 2D рисует прямо с атласа
-  log('event', 'gold.skin', kind);
+  if (S.mat) S.mat.uniforms.uJoker.value = kn === 'joker' ? 1 : 0;
+  atlasChanged(); log('event', 'gold.skin', kind);
 }
 function buildAtlas(){
-  const cv = document.createElement('canvas'); cv.width = cv.height = ATLAS_PX; const c = cv.getContext('2d');
-  c.fillStyle = '#efe6d0'; c.fillRect(0, 0, ATLAS_PX, ATLAS_PX);   // фон бумажный: на глубоких мипах в край крайних ячеек протекает бумага, а не чернота
+  const cv = document.createElement('canvas'); cv.width = ATLAS_W; cv.height = ATLAS_H; const c = cv.getContext('2d');
+  c.fillStyle = '#efe6d0'; c.fillRect(0, 0, ATLAS_W, ATLAS_H);   // фон бумажный: на глубоких мипах в край крайних ячеек протекает бумага, а не чернота
   const cell = (i, f) => { const [x, y] = cellXY(i); c.save(); c.beginPath(); c.rect(x, y, CELL_W, CELL_H); c.clip(); f(x, y); c.restore(); };   // каждая ячейка — в своём клипе
   for (let id = 0; id < 52; id++){ cell(id, (x, y) => drawFace(c, id, x, y, CELL_W, CELL_H, false)); cell(CELL_FAR0 + id, (x, y) => drawFace(c, id, x, y, CELL_W, CELL_H, true)); }
   cell(CELL_BACK, (x, y) => drawBack(c, x, y, CELL_W, CELL_H, false)); cell(CELL_BACK_FAR, (x, y) => drawBack(c, x, y, CELL_W, CELL_H, true));
   cell(CELL_GOLD, (x, y) => drawGold(c, x, y, CELL_W, CELL_H, false)); cell(CELL_GOLD_FAR, (x, y) => drawGold(c, x, y, CELL_W, CELL_H, true));
+  CFG.JOKERS.forEach((J, k) => { for (const side of [0, 1]) cell(CELL_HALF0 + 2 * k + side, (x, y) => drawHalfCard(c, x, y, CELL_W, CELL_H, false, J.id, side)); });
   return cv;
 }
 // ячейка атласа на 2D-холсте: в атласе контуров нет — углы режет клип, обводка рисуется тут же (свечения — спрайтами glow, под картой)
@@ -1767,6 +2021,8 @@ const VS = `
   uniform vec4 uFocus, uSigh;   // прожектор ямы: xy — центр (мир), z..w — от полного света до тёмного; волна «вздоха»: xy — центр, z — старт (с), w — амплитуда
   uniform vec2 uSighK;          // волна «вздоха»: скорость (высот карты в секунду), длительность (с) — CFG.FX.SIGH_SPEED, SIGH_S
   uniform vec2 uCut;            // куча оседает: нижние карты вне ямы дальше uCut.x от центра и ниже uCut.y (мир) не рисуются — подол тает к центру
+  uniform vec4 uHeat;           // «стог горит» (серия): xy — центр (мир, последняя снятая), z — радиус, w — сила; varying vHeat
+  varying float vHeat;
   varying vec2 vOrgN, vOrgF, vFu; varying float vLodK;   // начала ближней и дальней ячеек в атласе, координата в ячейке, доля ближней
   varying vec2 vLoc; varying float vShade; varying float vFlag; varying float vWarm; varying float vAlmost;
   varying vec3 vHill; varying float vSpec, vHgt, vMicro, vPaint;   // свет холма, блик, высота в стоге 0..1, доля микро-LOD, краска (0 чёрн., 1 красн., 2 рубашка, 3 золото)
@@ -1812,6 +2068,7 @@ const VS = `
     vSpec = pow(max(dot(n, normalize(normalize(cameraPosition - wc) + uLight)), 0.0), 48.0);
     vHgt = clamp(wc.y / uMaxHs, 0.0, 1.0);
     vFlag = aData.w;
+    vHeat = uHeat.w * (1.0 - smoothstep(0.0, uHeat.z, distance(instanceMatrix[3].xz, uHeat.xy)));
     // «стог вздыхает»: от туза расходится кольцо, карты поднимаются по вертикали мира; глубина — до подъёма, слои не мигают
     // подъём по y — это столбец 1 матрицы вида: вторая проекция только у карт в волне (без волны — одна, как раньше)
     vec4 wp = instanceMatrix * vec4(p, 1.0), cb = projectionMatrix * (modelViewMatrix * wp), cp = cb;
@@ -1825,12 +2082,12 @@ const VS = `
 // (10) блик и градиент; (11) дымка у основания; (12) обводка; (13) размытие под экранами; (14) виньетка.
 // Фрагменты не отбрасываются и альфа не идёт в покрытие: на Mali и Apple это отключает ранний отказ по глубине (скругление — геометрией).
 const FS = `
-  uniform sampler2D uMap; uniform float uTime, uDim, uBias, uAtlasPx, uHillK, uJoker; uniform vec2 uCellPx, uRes, uVC;   // uRes — буфер GL, px; uVC — центр свободной области (0..1)
+  uniform sampler2D uMap; uniform float uTime, uDim, uBias, uHillK, uJoker; uniform vec2 uAtlasPx, uCellPx, uRes, uVC;   // uAtlasPx — размер атласа; uRes — буфер GL, px; uVC — центр свободной области (0..1)
   uniform float uDimBias, uBackdrop, uDprBias;   // сдвиг мипа вне ямы (CFG.DIM_BIAS); стог под экраном-карточкой (0..1): размыт и приглушён; log2(px GL на CSS px)
   uniform float uDimLod, uBackLod;               // нижний предел мипа вне ямы и под экраном-карточкой (CFG.DIM_LOD, CFG.FX.BACKDROP_LOD)
   varying vec2 vOrgN, vOrgF, vFu; varying float vLodK;
   varying vec2 vLoc; varying float vShade; varying float vFlag; varying float vWarm; varying float vAlmost;
-  varying vec3 vHill; varying float vSpec, vHgt, vMicro, vPaint; varying float vFocus, vFlipK;
+  varying vec3 vHill; varying float vSpec, vHgt, vMicro, vPaint; varying float vFocus, vFlipK; varying float vHeat;
   void main(){
     // (1) e — расстояние до скруглённого края, высот карты (> 0 внутри); aa — пиксель в тех же единицах
     vec2 pp = (vLoc - 0.5) * vec2(0.714, 1.0), qq = abs(pp) - vec2(0.357 - 0.06, 0.5 - 0.06);
@@ -1882,6 +2139,8 @@ const FS = `
     if (vFlag > 6.5){ float s = vLoc.x * 0.714 + vLoc.y - mod(uTime * 0.45, 2.6) + 0.4;
       vec3 sc = uJoker > 0.5 ? 0.6 + 0.4 * cos(6.2832 * (vec3(0.0, 0.33, 0.67) + s * 0.6 + uTime * 0.25)) : vec3(1.0, 0.86, 0.5);
       c += sc * (exp(-s * s * 220.0) * 0.6 + vSpec * 0.5); c *= 1.04 + 0.04 * sin(uTime * 4.0); }
+    // (7b) «стог горит»: серия ≥ FIRE_AT — тёплый ореол на картах вокруг последней снятой, чуть дышит
+    if (vHeat > 0.001) c = mix(c, c * vec3(1.18, 0.95, 0.72) + vec3(0.20, 0.09, 0.0) * (0.85 + 0.15 * sin(uTime * 7.0 + vLoc.y * 5.0 + vLoc.x * 3.0)), vHeat * 0.85);
     // (8) кромки — от того же e, повторяют скругление; ширина не тоньше 2–2,5 device px (aa), иначе на мелких картах рвётся
     if (vAlmost > 0.5){   // «почти открыта»: на ней одна карта — рубашка холодно светлеет и дышит, по краю белая кромка (у тёплой — внутри оранжевой)
       float pul = 0.5 + 0.5 * sin(uTime * 2.2); c = mix(c, vec3(0.52, 0.66, 1.0), (0.15 + 0.07 * pul) * step(vFlag, 5.5));   // закрытый туз не синеет: только кромка
@@ -2009,10 +2268,10 @@ function initScene(){
   tex.anisotropy = Math.min(8, S.renderer.capabilities.getMaxAnisotropy());
   S.mat = new THREE.ShaderMaterial({ vertexShader: VS, fragmentShader: FS, side: THREE.DoubleSide, uniforms: {   // DoubleSide — переворот не дырявит яму
     uMap: { value: tex }, uPxPerUnit: { value: 1 }, uLodPx: { value: 44 }, uCols: { value: COLS }, uTime: { value: 0 }, uDim: { value: 0 }, uFaceRot: { value: 0 }, uYS: { value: 1 },
-    uFlip: { value: CFG.FLIP_S }, uSlide: { value: CFG.SLIDE_S }, uCell: { value: new THREE.Vector2(CELL_W / ATLAS_PX, CELL_H / ATLAS_PX) },
-    uCellPx: { value: new THREE.Vector2(CELL_W, CELL_H) }, uAtlasPx: { value: ATLAS_PX }, uBias: { value: 0 },
+    uFlip: { value: CFG.FLIP_S }, uSlide: { value: CFG.SLIDE_S }, uCell: { value: new THREE.Vector2(CELL_W / ATLAS_W, CELL_H / ATLAS_H) },
+    uCellPx: { value: new THREE.Vector2(CELL_W, CELL_H) }, uAtlasPx: { value: new THREE.Vector2(ATLAS_W, ATLAS_H) }, uBias: { value: 0 },
     uLight: { value: new THREE.Vector3(-0.5, 0.8, 0.3).normalize() }, uHillK: { value: 1 }, uMaxHs: { value: 1 },   // свет, холм — ставят placeCamera и tick
-    uFocus: { value: new THREE.Vector4(0, 0, 1e3, 1e3 + 1) }, uSigh: { value: new THREE.Vector4(0, 0, -1e3, 0) }, uDimBias: { value: CFG.DIM_BIAS }, uDprBias: { value: 0 },
+    uFocus: { value: new THREE.Vector4(0, 0, 1e3, 1e3 + 1) }, uSigh: { value: new THREE.Vector4(0, 0, -1e3, 0) }, uHeat: { value: new THREE.Vector4(0, 0, 1, 0) }, uDimBias: { value: CFG.DIM_BIAS }, uDprBias: { value: 0 },
     uDimLod: { value: CFG.DIM_LOD }, uBackLod: { value: CFG.FX.BACKDROP_LOD }, uSighK: { value: new THREE.Vector2(CFG.FX.SIGH_SPEED, CFG.FX.SIGH_S) },
     uRes: { value: new THREE.Vector2(1, 1) }, uVC: { value: new THREE.Vector2(0.5, 0.5) }, uBackdrop: { value: 0 }, uJoker: { value: 0 }, uCut: { value: new THREE.Vector2(1e4, 0) } } });   // uRes, uVC, uBackdrop — общие с землёй; uJoker — ячейки золота сейчас джокер
   // земля: стерня, тень стога (вправо-вниз по экрану) и виньетка — в шейдере; рисуется после карт (renderOrder 10), только там, где карт нет
@@ -2144,6 +2403,16 @@ function refreshData(){
   S.aData.needsUpdate = true;
   fillShadows();
 }
+// ячейки атласа (ближняя, дальняя) лица карты поиска / «Одного стога» и признак особой карты; лицо не решено — рубашка
+function faceCells(Z, i){
+  const f = Z.face[i];
+  if (f < 0) return [CELL_BACK, CELL_BACK_FAR, false];
+  if (f < 52) return [f, CELL_FAR0 + f, false];
+  const cell = wholeIsHalf(f) ? CELL_HALF0 + (f - FACE_HALF0) : CELL_PIECE0 + (f - FACE_PIECE0);
+  return [cell, cell, true];
+}
+// id карты для 2D (полёт на отбой, отбой): кусочек — своя золотая карта, половинка — −1 (золотая ячейка)
+function faceId(Z, i){ const f = Z.face[i]; return f < 52 ? f : wholeIsPiece(f) ? Z.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].id : -1; }
 // поиск: открытая — лицом, закрытая — рубашкой, туз — всегда золотом и блестит (сквозь щели тоже видно)
 function refreshSearch(){
   const Z = G.srch, P = Z.P, a = S.aData.array;
@@ -2152,10 +2421,10 @@ function refreshSearch(){
     if (!Z.alive[i]){ a[o + 3] = -1; continue; }
     const cov = Z.cover[i];
     if (i === Z.gold){ a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = cov ? 0.85 : 1; a[o + 3] = 7; }
-    else if (Z.zone && !Z.zone[i]){ const id = Z.face[i];   // «Один стог»: вне ямы — темнее (открытые — лицом), яма читается светлым пятном
-      if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = CFG.WHOLE.OUT_DIM; a[o + 3] = 2; } else { a[o] = id; a[o + 1] = CELL_FAR0 + id; a[o + 2] = CFG.WHOLE.OUT_FACE; a[o + 3] = 3; } }
+    else if (Z.zone && !Z.zone[i]){                 // «Один стог»: вне ямы — темнее, яма читается светлым пятном; открытые за краем — рубашкой посветлее
+      a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = cov ? CFG.WHOLE.OUT_DIM : CFG.WHOLE.OUT_FACE; a[o + 3] = 2; }   // (лицо решится, когда яма дорастёт)
     else if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.55, (Z.zone ? 1 : 0.9) - 0.04 * cov); a[o + 3] = 2; }
-    else { const id = Z.face[i]; a[o] = id; a[o + 1] = CELL_FAR0 + id; a[o + 2] = 1; a[o + 3] = 3; }
+    else { const [cn, cf, sp] = faceCells(Z, i); a[o] = cn; a[o + 1] = cf; a[o + 2] = 1; a[o + 3] = sp ? 7 : 3; }   // особые карты (половинка, кусочек) блестят, как золото
   }
   S.aData.needsUpdate = true;
   fillShadows();
@@ -2199,6 +2468,7 @@ const ease = (t) => t < 0 ? 0 : t > 1 ? 1 : 1 - (1 - t) * (1 - t);
 // кривые камеры и эффектов: t зажат в 0..1 (твин с отложенным стартом даёт q < 0 — стоит на месте)
 const cl01 = (t) => t < 0 ? 0 : t > 1 ? 1 : t;
 const easeOutCubic = (t) => 1 - Math.pow(1 - cl01(t), 3);
+const easeInCubic = (t) => Math.pow(cl01(t), 3);
 const easeInOutQuint = (t) => { t = cl01(t); return t < 0.5 ? 16 * t ** 5 : 1 - Math.pow(-2 * t + 2, 5) / 2; };
 const easeInOutSine = (t) => -(Math.cos(Math.PI * cl01(t)) - 1) / 2;
 const easeOutBack = (t, s = 1.70158) => { t = cl01(t); return 1 + (s + 1) * Math.pow(t - 1, 3) + s * Math.pow(t - 1, 2); };
@@ -2312,7 +2582,7 @@ function searchCam(){
   const FX = CFG.FX, yf = Math.max(0, Math.min(1, (k - FX.SEARCH_YS_FLAT) / (FX.SEARCH_YS_HOLD - FX.SEARCH_YS_FLAT)));   // плоская — только совсем вблизи
   CAM.ys = k >= FX.SEARCH_YS_HOLD ? FX.YS_HOLD + (CFG.OVER_YSCALE * 0.6 - FX.YS_HOLD) * (k - FX.SEARCH_YS_HOLD) / (1 - FX.SEARCH_YS_HOLD)
     : CFG.PIT_YSCALE + (FX.YS_HOLD - CFG.PIT_YSCALE) * yf * yf * (3 - 2 * yf);
-  CAM.dist = dClose * Math.pow(dFar / dClose, k); CAM.yaw = 0; CAM.pitch = CFG.PIT_PITCH + (CFG.OVER_PITCH + 0.15 - CFG.PIT_PITCH) * k;
+  CAM.dist = dClose * Math.pow(dFar / dClose, k) * G.chainZoomK; CAM.yaw = 0; CAM.pitch = CFG.PIT_PITCH + (CFG.OVER_PITCH + 0.15 - CFG.PIT_PITCH) * k;   // chainZoomK — наезд по серии («Один стог»)
   CAM.tx = tx; CAM.tz = tz; CAM.ty = heightAt(tx, tz) * CAM.ys * (1 - k) + S.maxH * 0.3 * CAM.ys * k;
 }
 function heightAt(x, z){ const i = Math.floor((x + S.hfExt) / CFG.HF_RES), j = Math.floor((z + S.hfExt) / CFG.HF_RES); return (i < 0 || j < 0 || i >= S.hfG || j >= S.hfG) ? 0 : S.hf[j * S.hfG + i]; }
@@ -2705,6 +2975,24 @@ function drawHalfWin(c, t){
 }
 // мини-карта джокера кучи под ☰: контур (половинок нет) или левая половина картинки — что собрано
 function jokerSlot(){ return { x: 30, y: safeT + HEADER_H + 30, w: 30, h: 42 }; }
+// половина картинки джокера (side 0 — левая, 1 — правая) с рваным краем, в прямоугольнике w×h с центром в (0, 0)
+function drawJokerHalf(c, id, side, w, h){
+  c.save(); c.beginPath(); const mid = 0, amp = w * 0.045;
+  if (side === 0){ c.moveTo(-w / 2, -h / 2); c.lineTo(mid, -h / 2); tearPath(c, mid, -h / 2, mid, h / 2, 11, amp); c.lineTo(-w / 2, h / 2); }
+  else { c.moveTo(w / 2, -h / 2); c.lineTo(mid, -h / 2); tearPath(c, mid, -h / 2, mid, h / 2, 11, amp); c.lineTo(w / 2, h / 2); }
+  c.closePath(); c.clip(); c.drawImage(jokerCanvas(id), -w / 2, -h / 2, w, h); c.restore();
+}
+// «Один стог»: мини-карта ближайшего несобранного джокера — взятые половинки на месте, остальное пунктиром; «0/2», «½», «2/2»
+function drawWholeJokerSlot(c, t){
+  const Z = G.srch, asm = G.fx.find(f => f.kind === 'jokerasm'), J = asm ? Z.jok[asm.k] : Z.jok.find(j => j.got < 2); if (!J) return;
+  const sl = jokerSlot(), id = CFG.JOKERS[J.k].id, flying = (side) => G.fx.some(f => f.kind === 'halffly' && f.k === J.k && f.side === side && t < f.t0 + f.dur);
+  c.save(); c.translate(sl.x, sl.y); c.globalAlpha = 0.95; c.fillStyle = 'rgba(20,15,5,.45)'; rr(c, -sl.w / 2, -sl.h / 2, sl.w, sl.h, 5); c.fill();
+  const shown = [0, 1].filter(side => J.sides[side] && !flying(side) && !asm);
+  for (const side of shown) drawJokerHalf(c, id, side, sl.w, sl.h);
+  if (asm) c.globalAlpha = 0.5;
+  c.setLineDash([3, 3]); c.lineWidth = 1.5; c.strokeStyle = 'rgba(255,247,230,.75)'; rr(c, -sl.w / 2, -sl.h / 2, sl.w, sl.h, 5); c.stroke(); c.setLineDash([]);
+  c.fillStyle = PAL.cream; c.font = '900 10px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'top'; c.fillText(shown.length === 2 ? '2/2' : shown.length === 1 ? '½' : '0/2', 0, sl.h / 2 + 3); c.restore();
+}
 function drawJokerSlot(c, t){
   if (!G.run || G.mode !== 'endless') return; const J = jokerOf(G.run.k), sl = jokerSlot(), got = G.run.half && !(G.halfWinAt && t - G.halfWinAt < CFG.FX.TROPHY_FADE_AT + 600);
   c.save(); c.translate(sl.x, sl.y); c.globalAlpha = 0.95; c.fillStyle = 'rgba(20,15,5,.45)'; rr(c, -sl.w / 2, -sl.h / 2, sl.w, sl.h, 5); c.fill();
@@ -2714,12 +3002,14 @@ function drawJokerSlot(c, t){
 }
 // способности собранных джокеров: кнопки-карты над колодой, бейдж — заряды; «Любая карта» взведена — светится
 function abilityList(){ const ch = G.save.endless.charges || {}; return CFG.JOKERS.filter(J => ch[J.id] > 0); }
-function abilityRects(){ const top = curGeo().top - 14, list = abilityList(); return list.map((J, i) => ({ J, x: VW - 28, y: top - 30 - i * 52, w: 32, h: 45 })); }
+// в кучах — справа над колодой; в «Одном стоге» — слева над панелью (справа кнопка «вся куча»)
+function abilityRects(){ const top = curGeo().top - 14, list = abilityList(), x = G.mode === 'search' ? 28 : VW - 28; return list.map((J, i) => ({ J, x, y: top - 30 - i * 52, w: 32, h: 45 })); }
 function drawAbilities(c, t){
-  if (G.mode !== 'endless' || !G.run || G.trayK < 0.5 || !G.st || !G.L) return; const ch = G.save.endless.charges;
-  for (const r of abilityRects()){ const on = r.J.id === 'wild' && G.wildArmed, pulse = 0.5 + 0.5 * Math.sin(t / 220);
+  const whole = G.mode === 'search' && G.srch && G.srch.whole;
+  if (G.trayK < 0.5 || !(whole || (G.mode === 'endless' && G.run && G.st && G.L))) return; const ch = G.save.endless.charges;
+  for (const r of abilityRects()){ const on = r.J.id === 'wild' && G.wildArmed, pulse = 0.5 + 0.5 * Math.sin(t / 220), pk = (t - (G.abilityPop[r.J.id] || -1e9)) / 360, ps = pk >= 0 && pk < 1 ? easeOutBack(pk) : 1;
     if (on) glow(c, GLOW.white, r.x, r.y, 34, 0.5 + 0.4 * pulse);
-    c.save(); c.translate(r.x, r.y); if (on) c.rotate(0.06 * Math.sin(t / 120)); rr(c, -r.w / 2, -r.h / 2, r.w, r.h, 5); c.save(); c.clip(); c.drawImage(jokerCanvas(r.J.id), -r.w / 2, -r.h / 2, r.w, r.h); c.restore();
+    c.save(); c.translate(r.x, r.y); c.scale(ps, ps); if (on) c.rotate(0.06 * Math.sin(t / 120)); rr(c, -r.w / 2, -r.h / 2, r.w, r.h, 5); c.save(); c.clip(); c.drawImage(jokerCanvas(r.J.id), -r.w / 2, -r.h / 2, r.w, r.h); c.restore();
     c.lineWidth = 1.5; c.strokeStyle = on ? '#fff' : 'rgba(40,30,20,.6)'; c.stroke();
     c.beginPath(); c.arc(r.w / 2 - 2, -r.h / 2 + 2, 8, 0, Math.PI * 2); c.fillStyle = '#e8384f'; c.fill(); c.fillStyle = '#fff'; c.font = '900 11px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(ch[r.J.id]), r.w / 2 - 2, -r.h / 2 + 2.5); c.restore(); }
 }
@@ -2862,6 +3152,7 @@ function playNode(q, how){
 // карту, подходящую к открытой; «Метла» сметает две открытые карты ямы (лежащие на тузе — первыми), текущая и серия не меняются
 function spendCharge(id){ const ch = G.save.endless.charges; ch[id] = Math.max(0, (ch[id] || 0) - 1); save(); log('event', 'joker.use', id + ' left=' + ch[id]); }
 function useAbility(id){
+  if (G.mode === 'search' && G.srch && G.srch.whole) return wholeAbility(id);
   const L = G.L, st = G.st, ch = G.save.endless.charges; if (!L || !st || !(ch[id] > 0)) return;
   Audio.ui(); log('input', 'joker.tap', id);
   if (id === 'wild'){ G.wildArmed = !G.wildArmed; tip(G.wildArmed ? 'Любая карта: тапни открытую карту ямы' : '', G.wildArmed ? 0 : undefined); return; }
@@ -3004,10 +3295,11 @@ function coins(n, x, y, why, o = {}){
 function deny(i){ addFx({ kind: 'deny', quad: cardQuad(i), dur: CFG.FX.DENY_MS }); }   // неверный ранг
 function miss(i){ addFx({ kind: 'miss', quad: cardQuad(i), dur: CFG.FX.MISS_MS }); }   // тап мимо ямы по тусклому стогу: не ошибка, только бледный контур
 // карта на отбой (яма и поиск): с серии TRAIL_STREAK — шлейф; шлейфов не больше двух — у самого старого он снимается
-function flyFx(id, quad, prev, streak){
+// o — { prevGold: на отбое лежала золотая коллекции, goldTrail: цепочка идёт на золотой — свечение и искры за картой }
+function flyFx(id, quad, prev, streak, o){
   const trail = streak >= CFG.FX.TRAIL_STREAK, t = now();
   if (trail){ const on = G.fx.filter(f => f.kind === 'fly' && f.trail && t < f.t0 + f.dur); if (on.length >= 2) on[0].trail = false; }
-  addFx({ kind: 'fly', id, quad, prev, trail, dur: CFG.FLY_MS });
+  addFx({ kind: 'fly', id, quad, prev, trail, dur: CFG.FLY_MS, ...(o || {}) });
 }
 // тряска 3D-слоя (сдвиг кадра в placeCamera; панель неподвижна): o — { dur, amp, peak, hz }; fx — только журнал
 function shake(o, why){ if (REDUCED) return; const t0 = now(); G.shake = { t0, ...o }; addFx({ kind: 'shake', t0, dur: o.dur, info: why }); }
@@ -3181,9 +3473,9 @@ function trayBase(c, top){ if (TRAY_BG) c.drawImage(TRAY_BG, 0, top - 18, VW, TR
 // сброс панели при новой партии (тест, забег, поиск): стопка отбоя, дорожка, призраки, бейджи
 function trayReset(){ G.discardRing = []; G.streakShown = 0; G.streakLost = null; G.ghostBase = -1; G.deckSeen = null; G.landAt = -1e9; G.preWinTop = null; G.goalQueue = []; G.denyAt = -1e9; G.deckPay = 0; G.goalBumps = []; G.goldRect = null; }   // goldRect — трофей прошлой победы: FLIP в карточку его не берёт
 // под отбой — прошлая карта; позы чередуются, чтобы карта не меняла наклон, уходя глубже
-function ringPush(id){ const r = G.discardRing; r.unshift({ id, p: r.length ? 1 - r[0].p : 0 }); if (r.length > 2) r.length = 2; }
+function ringPush(id, gold){ const r = G.discardRing; r.unshift({ id, gold: !!gold, p: r.length ? 1 - r[0].p : 0 }); if (r.length > 2) r.length = 2; }
 // посадка fly/deal на отбой: пружина отбоя, пыль, прошлая карта уходит в стопку
-function land(f, t){ f.landed = true; G.landAt = t; G.landAmp = f.kind === 'fly' ? 1 : 0.7; ringPush(f.prev);
+function land(f, t){ f.landed = true; G.landAt = t; G.landAmp = f.kind === 'fly' ? 1 : 0.7; ringPush(f.prev, f.prevGold);
   landDust(t, (f.id + 1) * 53 + f.prev + 7); }
 // пружина отбоя (её рисует drawDiscard по G.landAt) и пыль из нижних углов отбоя: посадка хода и добора, A♥ на переезде забега.
 // fx 'land' — только журнал
@@ -3203,7 +3495,7 @@ function goalWon(t){ G.goalQueue = []; if (G.goalShown){ G.goalShown = 0; G.goal
 function streakSeen(n, t){
   const FX = CFG.FX, s0 = G.streakShown, M = FX.STREAK_MILE;
   if (n > s0){ G.streakAt = t; addFx({ kind: 'streak.pop', t0: t, dur: Math.max(FX.STREAK_POP_MS, FX.STREAK_GLOW_MS, FX.STREAK_LABEL_MS), info: 'n=' + n });   // fx — только журнал: рисует drawTrack
-    if (Math.floor(Math.min(n, 3 * M) / M) > Math.floor(s0 / M)){ G.milestoneAt = t; addFx({ kind: 'streak.mile', t0: t, dur: (Math.min(FX.STREAK_LEN, n) - 1) * FX.STREAK_WAVE_MS + FX.STREAK_FLASH_MS, info: 'n=' + n }); } }
+    if (Math.floor(Math.min(n, FX.STREAK_MILES * M) / M) > Math.floor(s0 / M)){ G.milestoneAt = t; addFx({ kind: 'streak.mile', t0: t, dur: (Math.min(FX.STREAK_LEN, n) - 1) * FX.STREAK_WAVE_MS + FX.STREAK_FLASH_MS, info: 'n=' + n }); } }
   else if (n < s0 && !n && s0 >= 3){ const k = Math.min(FX.STREAK_LEN, s0); G.streakLost = { n: k, t0: t }; addFx({ kind: 'streak.lost', t0: t, dur: (k - 1) * FX.STREAK_LOST_STEP_MS + FX.STREAK_LOST_MS, info: 'n=' + s0 }); }
   G.streakShown = n;
 }
@@ -3235,11 +3527,16 @@ function drawTrack(c, n, top, t){
 // «жар отбоя»: серия больше STREAK_HOT — дорожка горит целиком, за отбоем тёплое свечение растёт с серией (ещё 5 карт)
 function discardHeat(c, g, n){ if (n <= CFG.FX.STREAK_HOT) return; const m = 10 + Math.min(5, n - CFG.FX.STREAK_HOT), R = 6 + 1.6 * m; glow(c, GLOW.warm, g.x, g.y, g.w / 2 + R, 0.15 + 0.03 * m, g.h / 2 + R); }   // сила 11…15 — как у прежних серий 11…15
 // подпись серии — слева от левого призрака, на его середине (не задевает ни призраков, ни колоду); при росте подскакивает
-function drawStreakLabel(c, streak, g, gy, t){
-  if (streak < 3) return;
-  const k = (t - G.streakAt) / CFG.FX.STREAK_LABEL_MS, s = k >= 0 && k < 1 ? 1.35 - 0.35 * ease(k) : 1;
-  c.save(); c.translate(g.x - GH_W - 14, gy + GH_H / 2); c.scale(s, s);
-  c.fillStyle = PAL.streak; c.font = '900 13px ' + FONT; c.textAlign = 'right'; c.textBaseline = 'middle'; c.fillText('серия ' + streak, 0, 0);
+// gold — цепочка идёт на золотой карте («Один стог»): подпись золотая и «×2»
+function drawStreakLabel(c, streak, g, gy, t, gold){
+  if (streak < 3 && !gold) return;
+  const FX = CFG.FX, k = (t - G.streakAt) / FX.STREAK_LABEL_MS, s = k >= 0 && k < 1 ? 1.35 - 0.35 * ease(k) : 1, big = Math.min(1, Math.max(0, (streak - FX.LABEL_BIG_AT) / FX.LABEL_BIG_AT));   // с LABEL_BIG_AT крупнее и теплее
+  const px = Math.round(13 + 4 * big), x = g.x - GH_W - 14, y = gy + GH_H / 2, txt = (streak >= 3 ? 'серия ' + streak : 'золотая') + (gold ? ' ×' + CFG.GOLD.BONUS_X : '');
+  c.save(); c.translate(x, y); c.scale(s, s);
+  c.font = '900 ' + px + 'px ' + FONT; c.textAlign = 'right'; c.textBaseline = 'middle';
+  if (streak >= FX.FIRE_AT){ const w = c.measureText(txt).width; glow(c, GLOW.warm, -w / 2, 0, w * 0.6 + 10, 0.35 + 0.1 * Math.sin(t / 90), px);   // огонь: тёплое свечение и искры по контуру
+    if (t - G.labelSparkAt > 110){ G.labelSparkAt = t; const R = mulberry32(t | 0); spawn('star', 1, x - w * R(), y + (R() - 0.5) * px * 1.2, { r: 6, life: 380 }, t | 0); } }
+  c.fillStyle = gold ? PAL.goldText : big > 0 ? '#ffb74a' : PAL.streak; if (big > 0 || gold){ c.lineWidth = 3; c.lineJoin = 'round'; c.strokeStyle = 'rgba(40,20,0,.6)'; c.strokeText(txt, 0, 0); } c.fillText(txt, 0, 0);
   c.restore(); c.textAlign = 'center';
 }
 // призрак ±1: тёмное стекло, кремовый ранг без масти; sx — переворот, s — подскок
@@ -3264,17 +3561,20 @@ function drawGhosts(c, base, g, gy, t){
   }
 }
 // отбой — стопка: 2 прошлые карты под текущей (−7° / +5°, ярче ×0,85), тень; посадка — пружина от нижнего края и пыль из углов
-function drawDiscard(c, g, id, t){
+// золотая карта коллекции («Один стог»): вместо ячейки атласа — её холст; на отбое — с золотым свечением
+function drawCardOrGold(c, id, gold, x, y, w, h){ if (!gold) return drawCell(c, id, x, y, w, h); c.save(); rr(c, x, y, w, h, w * 0.085); c.clip(); c.drawImage(goldCanvas(id), x, y, w, h); c.restore(); c.lineWidth = Math.max(1, w * 0.02); c.strokeStyle = 'rgba(80,50,10,.7)'; rr(c, x, y, w, h, w * 0.085); c.stroke(); }
+function drawDiscard(c, g, id, t, gold){
   const FX = CFG.FX, ring = G.discardRing;
   cardShadow(c, g.x + 2, g.y + 4, g.w, g.h, 0.35);
   for (let k = ring.length - 1; k >= 0; k--){
     const e = ring[k], a = e.p ? 5 : -7, dx = e.p ? 3 : -3, dy = e.p ? 3 : 2;
-    c.save(); c.translate(g.x + dx, g.y + dy); c.rotate(a * Math.PI / 180); drawCell(c, e.id, -g.w / 2, -g.h / 2, g.w, g.h);
+    c.save(); c.translate(g.x + dx, g.y + dy); c.rotate(a * Math.PI / 180); drawCardOrGold(c, e.id, e.gold, -g.w / 2, -g.h / 2, g.w, g.h);
     c.fillStyle = 'rgba(0,0,0,.15)'; rr(c, -g.w / 2, -g.h / 2, g.w, g.h, g.w * 0.085); c.fill(); c.restore();
   }
   const lq = (t - G.landAt) / FX.LAND_MS; let sx = 1, sy = 1;
   if (lq >= 0 && lq < 1){ const e = G.landAmp * Math.exp(-5 * lq) * Math.cos(2.5 * Math.PI * lq); sy = 1 - FX.LAND_SQUASH * e; sx = 1 + FX.LAND_STRETCH * e; }
-  c.save(); c.translate(g.x, g.y + g.h / 2); c.scale(sx, sy); drawCell(c, id, -g.w / 2, -g.h, g.w, g.h); c.restore();
+  if (gold) glowCard(c, GLOW.gold, g.x, g.y, g.w, g.h, 10, 0.35 + 0.15 * Math.sin(t / 300));
+  c.save(); c.translate(g.x, g.y + g.h / 2); c.scale(sx, sy); drawCardOrGold(c, id, gold, -g.w / 2, -g.h, g.w, g.h); c.restore();
 }
 // бейдж колоды — стекло на нижнем крае колоды (целиком в панели); смена цифры прокруткой; мало карт — тёплый и пульсирует
 function drawDeckBadge(c, d, v, t){
@@ -3378,7 +3678,27 @@ function drawWholeGoal(c, t, Z){
   c.fillStyle = PAL.cream; c.font = '900 ' + (left >= 10000 ? 17 : 20) + 'px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(left.toLocaleString('ru-RU'), a.x, a.y - 2);
   c.fillStyle = PAL.creamMuted; c.font = '800 11px ' + FONT; c.fillText(plural(left, 'карта', 'карты', 'карт'), a.x, a.y + 16);
   c.fillStyle = PAL.goldText; c.font = '900 13px ' + FONT; c.fillText(Math.floor(k * 100) + '%', a.x, a.y + a.h / 2 + 10);
-  c.fillStyle = PAL.creamMuted; c.font = '800 12px ' + FONT; c.fillText(fmtClock(G.srchElapsed), a.x, a.y + a.h / 2 + 24);
+  c.fillStyle = PAL.creamMuted; c.font = '800 12px ' + FONT; c.fillText(fmtClock(G.srchElapsed) + (Z.best >= 3 ? ' · ★' + Z.best : ''), a.x, a.y + a.h / 2 + 24);   // ★ — лучшая серия стога
+}
+// «Один стог»: слот сборки золотой карты — между отбоем и колодой: пунктирная карта, собранные четверти на месте, под ней «9♥ · 2/4»
+function goldSlotGeo(){ const g = curGeo(); return { x: (g.x + g.w / 2 + deckGeo().x - deckGeo().w / 2) / 2, y: g.y + 2, w: 40, h: 56 }; }
+function goldTarget(Z){ let t = null; for (const g of Z.golds) if (g.got > 0 && g.got < CFG.GOLD.PIECES) t = g; return t || Z.golds.find(g => g.got < CFG.GOLD.PIECES) || null; }
+// четверть q золотой карты id в прямоугольнике w×h с центром (0, 0)
+function drawGoldQuarter(c, id, q, w, h){ const qx = q % 2, qy = q >> 1; c.save(); c.beginPath(); c.rect(-w / 2 + qx * w / 2, -h / 2 + qy * h / 2, w / 2, h / 2); c.clip(); c.drawImage(goldCanvas(id), -w / 2, -h / 2, w, h); c.restore(); }
+function drawGoldSlot(c, t){
+  const Z = G.srch, asm = G.fx.find(f => f.kind === 'goldasm'), GD = asm ? Z.golds[asm.g] : goldTarget(Z); if (!GD) return;
+  const g = Z.golds.indexOf(GD), sl = goldSlotGeo(), flying = (q) => G.fx.some(f => f.kind === 'piecefly' && f.g === g && f.q === q && t < f.t0 + f.dur);
+  const got = []; for (let q = 0; q < CFG.GOLD.PIECES; q++) if (!Z.alive[GD.cards[q]] && !flying(q) && !(asm && t >= asm.t0)) got.push(q);   // четверть снята (по живым картам — верно и после продолжения)
+  const pulse = 0.5 + 0.5 * Math.sin(t / 400);
+  c.save(); c.translate(sl.x, sl.y);
+  if (got.length) glowCard(c, GLOW.gold, 0, 0, sl.w, sl.h, 4, 0.12 + 0.08 * got.length / CFG.GOLD.PIECES * pulse);
+  c.fillStyle = 'rgba(20,15,5,.45)'; rr(c, -sl.w / 2, -sl.h / 2, sl.w, sl.h, 5); c.fill();
+  for (const q of got) drawGoldQuarter(c, GD.id, q, sl.w, sl.h);
+  c.setLineDash([3, 3]); c.lineWidth = 1.5; c.strokeStyle = 'rgba(255,230,160,.7)'; rr(c, -sl.w / 2, -sl.h / 2, sl.w, sl.h, 5); c.stroke(); c.setLineDash([]);
+  c.fillStyle = PAL.goldText; c.font = '900 11px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'top';
+  const r = rk(GD.id), lbl = RANKS[r], lw = c.measureText(lbl).width; c.fillText(lbl, -7, sl.h / 2 + 4); drawSuit(c, Math.floor(GD.id / 13) % 4, -7 + lw / 2 + 7, sl.h / 2 + 10, 5);
+  c.fillStyle = PAL.creamMuted; c.font = '800 10px ' + FONT; c.fillText(got.length + '/' + CFG.GOLD.PIECES, 0, sl.h / 2 + 16);
+  c.restore();
 }
 // кнопка «вся куча» над панелью справа: лупа с «−» (отъехать на всю кучу), на всей куче — с «+» (обратно к той же точке)
 function zoomAllHit(p){ return G.mode === 'search' && G.trayK > 0.5 && Math.hypot(p.x / scale - (VW - 34), p.y / scale - (curGeo().top - 34)) <= 24; }
@@ -3397,11 +3717,12 @@ function drawSearchTray(c, t){
   trayBase(c, top);
   drawTrack(c, Z.streak, top, t);
   discardHeat(c, g, Z.streak);
-  drawStreakLabel(c, Z.streak, g, gy, t);
+  drawStreakLabel(c, Z.streak, g, gy, t, Z.whole && Z.goldTop);
   if (!Z.won) drawGhosts(c, rk(fl ? ((t - fl.t0) / fl.dur < 0.5 ? fl.prev : fl.id) : Z.top), g, gy, t);
-  drawDiscard(c, g, fl ? fl.prev : Z.won ? (G.preWinTop === null ? Z.top : G.preWinTop) : Z.top, t);   // летящая карта главнее победы (как в яме)
+  const shown = fl ? fl.prev : Z.won ? (G.preWinTop === null ? Z.top : G.preWinTop) : Z.top;   // летящая карта главнее победы (как в яме)
+  drawDiscard(c, g, shown, t, Z.whole && (fl ? fl.prevGold : Z.goldTop && Z.goldId === Z.top && !Z.streak));
   drawDeck(c, deckGeo(), Infinity, t, false, true);
-  if (Z.whole) drawWholeGoal(c, t, Z); else drawSearchGoal(c, t, Z);
+  if (Z.whole){ drawWholeGoal(c, t, Z); drawGoldSlot(c, t); } else drawSearchGoal(c, t, Z);
   drawZoomAll(c, top);
 }
 // блеск туза в куче поиска: когда на нём осталось мало карт, сквозь щели видна искра (на общем плане — главная подсказка)
@@ -3482,6 +3803,12 @@ function drawHand(c, x, y, t){
 }
 function hintTarget(t){                         // подсказка рукой: только на уроке и при знакомстве с колодой
   if (G.screen !== 'game') return null;
+  if (G.mode === 'search'){                       // «Один стог», урок: рука — на ближнюю к центру подходящую карту в кадре, иначе на колоду
+    const Z = G.srch; if (!Z || !Z.whole || !G.wholeTut || G.phase !== 'play' || t - G.lastInput < CFG.HINT_IDLE_MS || down || pxuNow() < 34) return null;
+    const pl = wholeInView().filter(i => wholeFits(Z, i)); if (!pl.length){ const d = deckGeo(); return { x: d.x, y: d.y }; }
+    let b = pl[0], bd = 1e9; for (const i of pl){ const c = cardCenter(i), d = Math.hypot(c.x - S.cssW / 2, c.y - S.cssH * 0.45); if (d < bd){ bd = d; b = i; } }
+    const c = cardCenter(b); return { x: c.x / scale, y: c.y / scale };
+  }
   const lesson = !!(G.L && G.L.kind === 'tiny');   // урок теста и первой ямы первого забега
   if (G.phase !== 'play' || (!lesson && (G.mode !== 'campaign' || G.li > 1)) || t - G.lastInput < CFG.HINT_IDLE_MS || down) return null;
   const pl = playable(G.L, G.st);
@@ -3531,6 +3858,58 @@ function drawOne(c, f, t){
     const A = f.pose, e = q * q, x = A.x + f.dir * 280 * e, y = A.y - Math.sin(Math.PI * Math.min(1, q * 1.2)) * 50 - 60 * e;
     c.save(); c.globalAlpha = 1 - q; c.translate(x, y); c.rotate(A.a + f.dir * 2.4 * e); drawCell(c, f.id, -A.w / 2, -A.h / 2, A.w, A.h); c.restore(); return true; }
   if (f.kind === 'magnet'){ glow(c, GLOW.cold, f.x, f.y, 50 + 40 * q, 0.7 * (1 - q)); return true; }   // магнит: свечение у колоды
+  if (f.kind === 'chain.break') return true;    // только журнал: отъезд и затухание ореола ведёт tick
+  if (f.kind === 'piecefly'){                  // «Один стог»: кусочек золотой летит из стога в свою четверть слота сборки
+    const A = f.pose, sl = goldSlotGeo(), qx = f.q % 2, qy = f.q >> 1, tx = sl.x - sl.w / 4 + qx * sl.w / 2, ty = sl.y - sl.h / 4 + qy * sl.h / 2, e = easeInOutSine(q);
+    const x = A.x + (tx - A.x) * e, y = A.y + (ty - A.y) * e - Math.sin(Math.PI * q) * 60, w = A.w + (sl.w / 2 - A.w) * e, h = w * 1.4;
+    glow(c, GLOW.gold, x, y, w * 0.9, 0.5 * (1 - q)); c.save(); c.translate(x, y); c.rotate(A.a * (1 - q)); drawCell(c, f.cell, -w / 2, -h / 2, w, h); c.restore();
+    if (q > 0.9 && !f.landed){ f.landed = true; burst(tx, ty, 6, 18, 400, 41 + f.q); }
+    return true; }
+  if (f.kind === 'goldasm'){                   // «ЗОЛОТАЯ 9♥!»: четверти из слота слетаются в центр в целую карту (1,2 → 1), вспышка, конфетти; в конце карта ныряет в колоду
+    const FX2 = CFG.FX, e = t - f.t0, ms = f.dur, sl = goldSlotGeo(), cw = 110, chh = 154, cy = H * 0.4, k = Math.min(1, e / 500), ek = easeInOutSine(k);
+    const outK = Math.max(0, (e - (ms - FX2.GOLD_ASM_OUT_MS)) / FX2.GOLD_ASM_OUT_MS), oe = easeInCubic(Math.min(1, outK)), d = deckGeo();
+    const x = VW / 2 + (d.x - VW / 2) * oe, y = cy + (d.y - cy) * oe, sc = (k < 1 ? 1.2 - 0.2 * ek : 1 + 0.05 * Math.max(0, Math.sin(Math.PI * Math.min(1, (e - 500) / 400)))) * (1 - oe * (1 - d.w / cw)), a = Math.min(1, (ms - e) / 150);
+    c.save(); c.globalAlpha = a; c.translate(x, y); c.scale(sc, sc);
+    if (k < 1) for (let qq = 0; qq < 4; qq++){ const qx = qq % 2, qy = qq >> 1, sx0 = (sl.x - sl.w / 4 + qx * sl.w / 2 - VW / 2) / 1.2, sy0 = (sl.y - sl.h / 4 + qy * sl.h / 2 - cy) / 1.2, w0 = sl.w / 2 / 1.2;   // из слота (в координатах карты)
+      const px = sx0 + (0 - sx0) * ek, py = sy0 + (0 - sy0) * ek, ww = w0 + (cw - w0) * ek, hh = ww * 1.4; c.save(); c.translate(px, py); drawGoldQuarter(c, f.id, qq, ww, hh); c.restore(); }
+    else { glowCard(c, GLOW.gold, 0, 0, cw, chh, 14, 0.5 * (1 - oe)); c.save(); rr(c, -cw / 2, -chh / 2, cw, chh, 10); c.clip(); c.drawImage(goldCanvas(f.id), -cw / 2, -chh / 2, cw, chh); c.restore(); }
+    if (k >= 1 && e < 500 + 500) glow(c, GLOW.white, 0, 0, 100, 0.85 * (1 - (e - 500) / 500));
+    c.restore();
+    if (k >= 1 && !f.flashed){ f.flashed = true; burst(VW / 2, cy, 26, 90, 900, 500 + f.g); confetti(500 + f.g, t, 1400); if (!REDUCED) addFx({ kind: 'flash', x: VW / 2, y: cy, dur: FX2.FLASH_MS }); }
+    if (outK >= 1 && !f.dived){ f.dived = true; burst(d.x, d.y - 10, 10, 36, 500, 77 + f.g); Audio.land(1, 0); }
+    if (outK <= 0){ c.save(); c.globalAlpha = a * Math.min(1, e / 200); c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+      const s = e < 400 ? easeOutBack(e / 400) : 1, yt = H * 0.16, lbl = 'ЗОЛОТАЯ ' + RANKS[rk(f.id)]; c.save(); c.translate(VW / 2, yt); c.scale(s, s); c.font = '900 30px ' + FONT; c.lineWidth = 8; c.strokeStyle = 'rgba(40,20,0,.85)';
+      const wl = c.measureText(lbl).width, sw = 30, we = c.measureText('!').width, x0 = -(wl + sw + we) / 2; c.textAlign = 'left'; c.strokeText(lbl, x0, 0); c.strokeText('!', x0 + wl + sw, 0); c.fillStyle = PAL.goldText; c.fillText(lbl, x0, 0); c.fillText('!', x0 + wl + sw, 0);
+      c.lineWidth = 6; c.lineJoin = 'round'; drawSuit(c, Math.floor(f.id / 13) % 4, x0 + wl + sw / 2 + 1, 1, 13); c.stroke(); c.fill(); c.restore();   // масть — путём, не глифом (iOS: ♥ — эмодзи)
+      if (k >= 1){ c.globalAlpha = a * Math.min(1, (e - 500) / 300); outlined(c, 'уходит в твою колоду · монеты ×' + CFG.GOLD.BONUS_X + ', пока серия на ней', VW / 2, cy + chh / 2 + 24, '800 13px ' + FONT, PAL.cream, 4); }
+      c.restore(); }
+    return true; }
+  if (f.kind === 'halffly'){                   // «Один стог»: половинка джокера летит из стога в мини-карту под ☰ (дуга, уменьшается)
+    const A = f.pose, sl = jokerSlot(), e = easeInOutSine(q), x = A.x + (sl.x - A.x) * e, y = A.y + (sl.y - A.y) * e - Math.sin(Math.PI * q) * 70, w = A.w + (sl.w - A.w) * e, h = w * 1.4;
+    glow(c, GLOW.white, x, y, w, 0.5 * (1 - q)); c.save(); c.translate(x, y); c.rotate(A.a * (1 - q)); drawJokerHalf(c, f.id, f.side, w, h); c.restore();
+    if (q > 0.92 && !f.landed){ f.landed = true; burst(sl.x, sl.y, 8, 26, 500, 31 + f.k); }
+    return true; }
+  if (f.kind === 'halflabel'){                 // подпись: «ПОЛОВИНКА «МЕТЛЫ»» · вторая где-то в стоге
+    const a = Math.min(1, q * 8, (1 - q) * 4), s = q < 0.15 ? easeOutBack(q / 0.15) : 1, y = H * 0.16;
+    c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+    c.save(); c.translate(VW / 2, y); c.scale(s, s); c.font = '900 24px ' + FONT; c.lineWidth = 7; c.strokeStyle = 'rgba(30,10,40,.85)'; c.strokeText('ПОЛОВИНКА ДЖОКЕРА', 0, 0); c.fillStyle = rainbow(c, 0, 280); c.fillText('ПОЛОВИНКА ДЖОКЕРА', 0, 0); c.restore();
+    outlined(c, '«' + f.name + '» · вторая где-то в стоге', VW / 2, y + 30, '800 14px ' + FONT, PAL.cream, 4); c.restore(); return true; }
+  if (f.kind === 'jokerasm'){                  // «ДЖОКЕР СОБРАН!»: половинки съезжаются в карту со вспышкой, имя и способность; в конце карта уходит в кнопку
+    const J = CFG.JOKERS.find(j => j.id === f.id), FX2 = CFG.FX, e = t - f.t0, ms = f.dur, a = Math.min(1, e / 200, (ms - e) / 300), cw = 110, chh = 154, cy = H * 0.4;
+    const k = Math.min(1, e / 450), gap = 70 * (1 - easeOutCubic(k)), sc0 = k >= 1 ? 1 + 0.06 * Math.max(0, Math.sin(Math.PI * Math.min(1, (e - 450) / 400))) : 1;
+    const outK = Math.max(0, (e - (ms - FX2.JOKER_ASM_OUT_MS)) / FX2.JOKER_ASM_OUT_MS), rect = abilityRects().find(r => r.J.id === f.id), tx = rect ? rect.x : 28, ty = rect ? rect.y : trayTop() - 50;
+    const oe = easeInOutSine(Math.min(1, outK)), x = VW / 2 + (tx - VW / 2) * oe, y = cy + (ty - cy) * oe, sc = sc0 * (1 - oe * (1 - 32 / cw));
+    c.save(); c.globalAlpha = outK > 0 ? 1 : a; c.translate(x, y); c.scale(sc, sc);
+    if (k < 1) for (const side of [0, 1]){ c.save(); c.translate(side ? gap : -gap, 0); drawJokerHalf(c, f.id, side, cw, chh); c.restore(); }
+    else { c.save(); rr(c, -cw / 2, -chh / 2, cw, chh, 10); c.clip(); c.drawImage(jokerCanvas(f.id), -cw / 2, -chh / 2, cw, chh); c.restore(); }
+    if (k >= 1 && e < 450 + 500) glow(c, GLOW.white, 0, 0, 95, 0.8 * (1 - (e - 450) / 500));
+    c.restore();
+    if (k >= 1 && !f.flashed){ f.flashed = true; burst(VW / 2, cy, 24, 80, 900, 700 + f.k); confetti(900 + f.k, t, 1800); }
+    if (outK <= 0){ c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+      const s = e < 400 ? easeOutBack(e / 400) : 1, yt = H * 0.16; c.save(); c.translate(VW / 2, yt); c.scale(s, s); c.font = '900 30px ' + FONT; c.lineWidth = 8; c.strokeStyle = 'rgba(30,10,40,.85)'; c.strokeText('ДЖОКЕР СОБРАН!', 0, 0); c.fillStyle = rainbow(c, 0, 300); c.fillText('ДЖОКЕР СОБРАН!', 0, 0); c.restore();
+      if (k >= 1){ c.globalAlpha = a * Math.min(1, (e - 450) / 300); outlined(c, '«' + J.name + '» — ' + J.ability.toLowerCase() + ' ×' + J.charges, VW / 2, cy + chh / 2 + 22, '900 16px ' + FONT, PAL.goldText, 5); outlined(c, J.desc, VW / 2, cy + chh / 2 + 42, '800 13px ' + FONT, PAL.cream, 4); }
+      c.restore(); }
+    return true; }
   if (f.kind === 'fly'){                       // карта на отбой: подъём на месте, дуга с креном и тенью; при серии — шлейф
     const A = f.pose || (f.pose = quadPose(f.quad)), g = curGeo(), B = { x: g.x, y: g.y, w: g.w, h: g.h, a: 0 }, L = CFG.FLY_LIFT_MS / f.dur;
     if (f.trail && q > L) for (let k = 3; k >= 1; k--){   // шлейф: 3 копии позы позади (только карта, без тени)
@@ -3539,6 +3918,7 @@ function drawOne(c, f, t){
     }
     const p = flyPose(A, B, q, L);
     if (p.sa > 0.01) cardShadow(c, p.x + p.sx, p.y + p.sy, p.w, p.h, p.sa, p.a);
+    if (f.goldTrail){ c.save(); c.translate(p.x, p.y); c.rotate(p.a); glowCard(c, GLOW.gold, 0, 0, p.w, p.h, 10, 0.55); c.restore(); if (q > L && (q * 50 | 0) !== f.lastStar){ f.lastStar = q * 50 | 0; spawn('star', 1, p.x, p.y, { r: 10, life: 320 }, f.lastStar + f.id * 3); } }   // золотой шлейф: свечение и искры
     c.save(); c.translate(p.x, p.y); c.rotate(p.a); drawCell(c, f.id === -1 ? CELL_GOLD : f.id, -p.w / 2, -p.h / 2, p.w, p.h); c.restore();
   } else if (f.kind === 'goldfly'){            // трофей: вверх, в центр с оборотом и пружинкой, висит до конца фазы победы
     if (G.screen !== 'game') return true;      // на экране победы его заменяет туз карточки — двойного нет
@@ -3581,7 +3961,8 @@ function drawOne(c, f, t){
   } else if (f.kind === 'deal'){              // карта колоды ложится на отбой, переворачиваясь на полпути (там — белый блик)
     const g = curGeo(), e = ease(q), x = f.x0 + (g.x - f.x0) * e, y = f.y0 + (g.y - f.y0) * e - Math.sin(e * Math.PI) * 18, sx = Math.abs(Math.cos(e * Math.PI));
     const w = 60 + (g.w - 60) * e, h = 84 + (g.h - 84) * e, tq = (q - (1 - Math.SQRT1_2)) * f.dur;   // e = 0,5 при q = 1 − √½
-    c.save(); c.translate(x, y); c.scale(Math.max(0.05, sx), 1); drawCell(c, e < 0.5 ? CELL_BACK : f.id, -w / 2, -h / 2, w, h);
+    if (f.gold && e >= 0.5) glowCard(c, GLOW.gold, x, y, w * sx, h, 8, 0.6);
+    c.save(); c.translate(x, y); c.scale(Math.max(0.05, sx), 1); if (e < 0.5) drawCell(c, CELL_BACK, -w / 2, -h / 2, w, h); else drawCardOrGold(c, f.id, f.gold, -w / 2, -h / 2, w, h);
     if (tq >= 0 && tq < FX.DEAL_GLINT_MS){ c.fillStyle = 'rgba(255,255,255,' + (0.5 * (1 - tq / FX.DEAL_GLINT_MS)).toFixed(3) + ')'; rr(c, -w / 2, -h / 2, w, h, w * 0.085); c.fill(); }
     c.restore();
   } else if (f.kind === 'drop'){              // «+5»: карта падает в колоду
@@ -3640,6 +4021,7 @@ function renderUI(t){
   if (G.shrink) drawShrink(c, t);
   if (G.pileIntro) drawPileIntro(c, t);
   if (G.mode === 'endless'){ drawJokerWin(c, t); drawHalfWin(c, t); if (G.pileMove) drawPileNext(c, t); if (G.screen === 'game'){ drawJokerSlot(c, t); drawAbilities(c, t); } }
+  if (G.mode === 'search' && G.srch && G.srch.whole && G.screen === 'game' && G.phase === 'play'){ drawWholeJokerSlot(c, t); drawAbilities(c, t); }
   const h = hintTarget(t); if (h) drawHand(c, h.x, h.y, t);
   if (down && !down.moved && down.hold >= 0 && !down.loupe){       // кольцо лупы вокруг пальца
     const ms = t - down.t0; if (ms > CFG.LOUPE_RING_MS){ const k = Math.min(1, (ms - CFG.LOUPE_RING_MS) / (CFG.LOUPE_MS - CFG.LOUPE_RING_MS));
@@ -3676,7 +4058,8 @@ function drawPic(cv, kind){
   const ghost = (x, y, w, h, txt) => { c.fillStyle = 'rgba(16,18,10,.82)'; rr(c, x, y, w, h, 5); c.fill(); c.lineWidth = 1.5; c.strokeStyle = 'rgba(255,247,230,.3)'; c.stroke();
     c.fillStyle = P.cream; c.font = '900 20px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, x + w / 2, y + h / 2 + 1); };
   const deck = (x, y, w, h) => { for (let k = 2; k >= 0; k--) card(CELL_BACK, x + 4 * k, y + 4 * k, w, h); };
-  if (kind === 'ace' || kind === 'gold' || kind === 'mini') card(CELL_GOLD, 1, 1, W - 2, Hc - 2);
+  if (kind.startsWith('goldcard:')){ const id = +kind.slice(9); c.save(); rr(c, 1, 1, W - 2, Hc - 2, W * 0.085); c.clip(); c.drawImage(goldCanvas(id), 1, 1, W - 2, Hc - 2); c.restore(); c.lineWidth = Math.max(1, W * 0.02); c.strokeStyle = 'rgba(80,50,10,.7)'; rr(c, 1, 1, W - 2, Hc - 2, W * 0.085); c.stroke(); }
+  else if (kind === 'ace' || kind === 'gold' || kind === 'mini') card(CELL_GOLD, 1, 1, W - 2, Hc - 2);
   else if (kind === 'logo') card(CELL_GOLD, (W - 50) / 2, (Hc - 70) / 2, 50, 70, -8 * Math.PI / 180);   // вместо «О»: туз, повёрнутый на −8° внутри холста
   else if (kind === 'fan'){                     // «+5»: веер из 5 рубашек −16°…+16° с шагом 8°, ось — под веером
     for (let k = -2; k <= 2; k++){ c.save(); c.translate(W / 2, Hc + 46); c.rotate(k * 8 * Math.PI / 180); drawCell(c, CELL_BACK, -40, -Hc - 36, 80, 112); c.restore(); }
@@ -3698,12 +4081,6 @@ function drawPic(cv, kind){
 let logoPainted = false;
 function paintLogo(){ if (!logoPainted && S.atlas){ drawPic($('logo-ace'), 'logo'); logoPainted = true; } }
 // стог за меню — в центре свободной части кадра: верх листа (CSS px от верха #frame; offsetTop — без анимации входа)
-// «Один стог» в меню: вторая кнопка; начатый стог — сколько осталось
-function wholeBtn(){
-  const Z = G.mode === 'search' && G.srch && G.srch.whole && !G.srch.won ? G.srch : null, sv = G.save.whole, N = CFG.WHOLE.N;
-  const left = Z ? N - Z.removed : sv.seed && sv.n === N && sv.removed.length ? N - sv.removed.length : 0;
-  return `<button class="btn wide" data-act="whole">${left ? 'Один стог · осталось ' + left.toLocaleString('ru-RU') : 'Один стог · ' + N.toLocaleString('ru-RU') + ' карт'}</button>`;
-}
 function menuView(){ if (G.screen === 'menu') G.viewBottom = $('card').offsetTop + $('overlay').offsetTop; }
 // выход из меню в общий план: камера возвращается к расстоянию до меню (отъезд — в goto('menu'))
 function menuCamBack(){
@@ -3786,16 +4163,19 @@ function goto(screen){
     const tSrch = tile('search', 'search', 'Иголка', 'куча ' + searchSpec(G.save.search.k).N.toLocaleString('ru-RU'));
     const ep = G.save.endless.pile, ek = ep ? ep.k : 0, eN = endlessSpec(ek).shown, eLeft = Math.max(0, eN - (ep && ep.fake || 0));
     const tEndl = tile('endless', 'endless', 'Бесконечный', 'куча ' + (ek + 1) + ' · ' + (eLeft < eN ? 'осталось ' + eLeft.toLocaleString('ru-RU') : eN.toLocaleString('ru-RU') + ' карт'));
-    const ep1 = G.save.endless.pile;
-    const top = !CFG.MODES.campaign && !CFG.MODES.search ? (M.runLive ? main('resume', 'Продолжить · куча ' + (G.run.k + 1)) : main('endless', ep1 ? 'Продолжить · куча ' + (ek + 1) : 'Старт'))
-        + (ep1 || M.runLive ? `<p class="sub">осталось ${(M.runLive ? endlessLeft() : eLeft).toLocaleString('ru-RU')} из ${eN.toLocaleString('ru-RU')} карт</p>` : '') + wholeBtn()
+    const ep1 = G.save.endless.pile, sw = G.save.whole, WN = CFG.WHOLE.N, Zl = G.mode === 'search' && G.srch && G.srch.whole && !G.srch.won ? G.srch : null;
+    const wLeft = Zl ? WN - Zl.removed : sw.seed && sw.n === WN && sw.removed.length ? WN - sw.removed.length : 0, wBest = Zl ? Math.max(Zl.best, sw.bestStreak || 0) : sw.bestStreak || 0;
+    // один режим (Андрей 02.11 вечер): главная кнопка — «Один стог» (или возврат в живой забег куч), «Кучи» — второй кнопкой
+    const wholeMain = main('whole', wLeft ? 'Продолжить' : 'Старт') + (wLeft ? `<p class="sub">осталось ${wLeft.toLocaleString('ru-RU')} из ${WN.toLocaleString('ru-RU')} карт${wBest >= 3 ? ' · лучшая серия ' + wBest : ''}</p>` : sw.wins ? `<p class="sub">разобрано стогов: ${sw.wins}${wBest >= 3 ? ' · лучшая серия ' + wBest : ''}</p>` : '');
+    const pilesBtn = (act) => `<button class="btn wide" data-act="${act}">Кучи · куча ${(M.runLive ? G.run.k : ek) + 1}${(M.runLive ? endlessLeft() : eLeft) < eN ? ' · осталось ' + (M.runLive ? endlessLeft() : eLeft).toLocaleString('ru-RU') : ''}</button>`;
+    const top = !CFG.MODES.campaign && !CFG.MODES.search ? (M.runLive ? main('resume', 'Продолжить · куча ' + (G.run.k + 1)) + `<button class="btn wide" data-act="whole">${wLeft ? 'Один стог · осталось ' + wLeft.toLocaleString('ru-RU') : 'Один стог'}</button>` : wholeMain + pilesBtn('endless'))
       : M.pitLive ? main('resume', 'Продолжить яму ' + (G.li + 1)) + `<div class="tiles">${tSrch}${tEndl}</div>`
       : M.runLive ? main('resume', 'Продолжить кучу ' + (G.run.k + 1) + ' · осталось ' + endlessLeft().toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tSrch}</div>`
       : M.srchLive ? main('search', 'Продолжить поиск · куча ' + G.srch.P.N.toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tEndl}</div>`
       : main('play', done ? 'Тест заново' : 'Играть · яма ' + (lvl + 1) + ' из ' + N) + `<div class="tiles">${tSrch}${tEndl}</div>`;
     const link = (act, txt) => `<button data-act="${act}">${txt}</button>`;
-    const single = !CFG.MODES.campaign && !CFG.MODES.search, hasRes = Object.keys(G.save.metrics).length > 0, canReset = single ? !!(ep1 || G.save.endless.piles) : !!G.save.level;
-    show(`<p>${single ? 'Разбери стог и найди радужного джокера' : 'Найди золотой туз в стоге из 10 000 карт'}</p>${top}
+    const single = !CFG.MODES.campaign && !CFG.MODES.search, hasRes = Object.keys(G.save.metrics).length > 0, canReset = single ? !!(ep1 || G.save.endless.piles || wLeft || sw.wins || G.save.gold.cards.length) : !!G.save.level;
+    show(`<p>${single ? 'Снимай карты ±1, держи цепочку, собирай джокеров и золотые' : 'Найди золотой туз в стоге из 10 000 карт'}</p>${top}
       <div class="links">${!single || hasRes ? link('results', 'Итоги') + '·' : ''}${link('help', 'Как играть')}·<button data-act="music"${G.save.music !== false ? '' : ' class="off"'} aria-pressed="${G.save.music !== false}">Музыка</button>${canReset ? '·' + link('restart', 'Сначала') : ''}</div>`, 'sheet menu');
     paintLogo(); menuView();
     // с общего плана камера отъезжает (стог целиком над листом); обратно — menuCamBack при выходе в общий план
@@ -3812,8 +4192,11 @@ function goto(screen){
     const endl = '<h3>Бесконечный стог</h3>' + row('endless', 'Ямы подряд, колода общая. Золотой туз — +' + CFG.ENDLESS.GOLD_CARDS + ' карт. В середине кучи на тузе — половинка джокера, вторая — в конце: собери джокера и переходи к куче побольше. Колода кончилась — куча ждёт.')
       + row('', 'Собранный джокер — способность с зарядами (кнопка над колодой): «Радужный» — любая карта, «Магнит» — нужная из колоды, «Метла» — смести две.');
     const srch = '<h3>Иголка в стоге</h3>' + row('search', 'В куче один золотой туз. Снимай любые открытые ±1, колода бесконечная. Золотая пыль — туз рядом, искра — почти наверху. Щипок или кнопка «вся куча» — увидеть кучу.');
-    const whole = '<h3>Один стог</h3>' + row('search', 'Весь стог — одна яма: снимай любые открытые ±1, колода бесконечная, проигрыша нет. Разбирай до конца — прогресс сохраняется, можно вернуться в любой момент.');
-    const order = !CFG.MODES.campaign && !CFG.MODES.search ? [pit, endl, whole] : G.mode === 'search' ? [srch, pit, endl] : G.mode === 'endless' ? [endl, pit, srch] : [pit, endl, srch];
+    const whole = '<h3>Один стог</h3>' + row('rank', 'Весь стог — одна яма: снимай открытые карты на 1 больше или меньше, чем на отбое (K и A — соседи, масть не важна). Колода бесконечная, проигрыша нет, стог сохраняется.')
+      + row('deck', 'Серия — карты подряд без колоды: с 5-й монеты, с 10-й огонь. Нет хода — колода, серия с начала.')
+      + row('gold', 'В стоге лежат четверти золотых карт — собери четыре, и золотая уйдёт в твою колоду: пока цепочка идёт на ней, монеты ×' + CFG.GOLD.BONUS_X + '.')
+      + row('', 'Половинки джокеров — тоже в стоге, снимаются любым тапом. Две половинки — джокер и способность с зарядами (кнопка над колодой).');
+    const order = !CFG.MODES.campaign && !CFG.MODES.search ? [whole, endl, pit] : G.mode === 'search' ? [srch, pit, endl] : G.mode === 'endless' ? [endl, pit, srch] : [pit, endl, srch];
     show(`<h2>Как играть</h2><div class="help">${order.join('')}</div>
       <div class="foot"><button class="btn primary wide" data-act="${G.st && G.phase !== 'idle' ? 'resume' : 'menu'}">Понятно</button></div>`);
   }
@@ -3836,7 +4219,7 @@ function goto(screen){
     finalOpen();
   }
   if (screen === 'results') show(resultsHtml());
-  if (screen === 'confirm-reset') show(`<h2>Начать тест заново?</h2><p>Итоги ${LEVELS.length} ям и монеты сотрутся</p>
+  if (screen === 'confirm-reset') show(`<h2>Начать сначала?</h2><p>${!CFG.MODES.campaign && !CFG.MODES.search ? 'Стог, кучи, монеты и коллекция золотых карт сотрутся' : 'Итоги ' + LEVELS.length + ' ям и монеты сотрутся'}</p>
       <div class="row"><button class="btn primary" data-act="reset-yes">Сбросить</button><button class="btn" data-act="menu">Отмена</button></div>`);
   // интро режимов: «Назад» — в меню (тап по плитке по ошибке не стоит живой ямы или забега)
   if (screen === 'intro-endless') show(`<div class="intro">${ICON.endless}</div><h2>Бесконечный стог</h2>
@@ -3848,9 +4231,11 @@ function goto(screen){
       <button class="btn primary wide" data-act="search-go">Искать</button>
       <button class="btn quiet wide" data-act="menu">Назад</button>`);
   if (screen === 'search-win' && G.srch && G.srch.whole){
-    const sv = G.save.whole, Z = G.srch, ms = sv.lastMs || 0;
-    show(`${trophyHtml(false)}<h2>Стог разобран!</h2><p>Все ${Z.P.N.toLocaleString('ru-RU')} карт сняты</p>
-      <div class="stats">${statHtml(fmtClock(ms), 'время', `data-to="${ms}" data-fmt="clock"`)}${statHtml(Z.taps - Z.draws, 'снято')}${statHtml(Z.draws, plural(Z.draws, 'добор', 'добора', 'доборов'))}</div>
+    const sv = G.save.whole, Z = G.srch, ms = sv.lastMs || 0, golds = sv.lastGolds || [], all = G.save.gold.cards, jk = sv.lastJokers || [];
+    const gc = (id, cls) => `<canvas class="${cls || ''}" width="28" height="40" data-pic="goldcard:${id}"></canvas>`;
+    const row = golds.length ? `<div class="aces">${golds.map(id => gc(id, 'cur')).join('')}</div><p class="sub">золотых за стог ${golds.length} · всего в колоде ${all.length}</p>` : `<p class="sub">золотых карт в колоде: ${all.length}</p>`;
+    show(`${trophyHtml(false)}<h2>Стог разобран!</h2><p>Все ${Z.P.N.toLocaleString('ru-RU')} карт сняты${jk.length ? ' · джокеров ' + jk.length : ''}</p>${row}
+      <div class="stats">${statHtml(fmtClock(ms), 'время', `data-to="${ms}" data-fmt="clock"`)}${statHtml(sv.lastBest || 0, 'лучшая серия', `data-to="${sv.lastBest || 0}"`)}${statHtml(Z.draws, plural(Z.draws, 'добор', 'добора', 'доборов'), `data-to="${Z.draws}"`)}</div>
       <div class="row"><button class="btn primary" data-act="whole">Новый стог</button><button class="btn" data-act="menu">Меню</button></div>`);
     finalOpen();
   }
@@ -3923,7 +4308,8 @@ function resetProgress(){
   if (G.mode !== 'campaign'){ if (G.mode === 'search') searchSave(true); G.mode = 'campaign'; G.srch = null; G.run = null; setScenePile(!CFG.MODES.campaign && !CFG.MODES.search ? endlessPile() : pile()); }
   if (Object.keys(G.save.metrics).length) G.save.metricsPrev = G.save.metrics;   // прежние итоги не теряются совсем
   G.save.level = 0; G.save.removed = {}; G.save.metrics = {}; G.save.coins = CFG.COINS_START; G.coinsShown = G.save.coins;
-  G.save.endless.pile = null; G.save.endless.piles = 0; G.save.endless.pitsTotal = 0; G.save.endless.charges = {}; save();   // и куча забега (урок второй раз не показывается)
+  G.save.endless.pile = null; G.save.endless.piles = 0; G.save.endless.pitsTotal = 0; G.save.endless.charges = {};   // и куча забега (урок второй раз не показывается)
+  Object.assign(G.save.whole, { seed: 0, removed: [], faces: null, wins: 0, jokers: 0, bestStreak: 0, elapsed: 0 }); G.save.gold.cards = []; save();   // и стог с коллекцией золотых
   G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; G.phase = 'idle'; dropFx(); G.offer = null; G.shrink = null; tip('');
   G.aliveNow = aliveFromSave(); clearAnims(); refreshData(); const U = S.mesh.material.uniforms; U.uDim.value = 0; U.uFaceRot.value = 0; S.faceRot = 0;
   const h = overHome(0); Object.assign(CAM, h); home = { ...h }; camTw = null; spin = null; zoom = 1; hud();
@@ -3947,6 +4333,7 @@ function routeHash(h){
   else if (h === 'offer'){ if (!G.L) startLevel(Math.max(1, Math.min(G.save.level, LEVELS.length - 1))); G.offer = { frame: 'on-ace', onGold: 2, attempt: 0, taken: null, t: now() }; G.phase = 'offer'; G.trayK = 1; goto('offer'); }
   else if (h === 'endless'){ G.save.seen.endless = 1; save(); startEndless(); }   // хеши режимов — без интро, интро — своими хешами
   else if (h === 'search'){ G.save.seen.search = 1; save(); searchSoon(); }
+  else if (h === 'whole') searchSoon(0, true);
   else if (h === 'confirm-reset'){ G.resetThen = 'menu'; goto('confirm-reset'); }
   else if (['menu', 'help', 'results', 'intro-endless', 'intro-search'].includes(h)) goto(h);
   else goto('menu');
@@ -4091,6 +4478,7 @@ function nearQuads(Q0, quads, max){
 function searchTapAt(p){
   const Z = G.srch; if (!Z || Z.won || G.phase !== 'play') return;
   if (zoomAllHit(p)){ G.szTo = G.szTo >= 0.9 ? 0.12 : 1; G.zoomAllUsed = true; log('input', 'search.zoomall', 'sz=' + G.szTo); return; }   // «вся куча» и обратно — к той же точке
+  if (Z.whole && G.trayK > 0.5) for (const r of abilityRects()) if (inRect(p, r, 8)){ useAbility(r.J.id); return; }
   if (inTray(p)){ if (inRect(p, deckGeo(), 10)) searchDeck(); return; }
   const hit = pickCard(p.x, p.y);
   if (pxuNow() < 34){                           // издалека карты не читаются — тап приближает туда, куда показали
@@ -4107,15 +4495,19 @@ function searchHit(hit){
     tipOnce('hold', 'Её держат обведённые карты — сними их', CFG.FX.TIP_HOLD_MS); return;
   }
   if (Z.zone && !Z.zone[hit]){ deny(hit); Audio.peek(); buzz('closed'); tipOnce('far', 'Тёмная — за краем ямы. Яма растёт от снятых карт', CFG.FX.TIP_HOLD_MS); log('input', 'whole.far'); return; }
-  if (hit !== Z.gold && !ok(rk(Z.top), rk(Z.face[hit]))){ G.lv.wrong++; deny(hit); denyHop(); Audio.wrong(); buzz('wrong'); return; }
-  const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold]; G.preWinTop = prev; const r = searchTap(Z, hit);
+  const how = Z.whole && G.wildArmed ? 'wild' : undefined;   // «любая карта» взведена: ранг не проверяется
+  if (Z.whole ? !how && !wholeFits(Z, hit) : hit !== Z.gold && !ok(rk(Z.top), rk(Z.face[hit]))){ G.lv.wrong++; deny(hit); denyHop(); Audio.wrong(); buzz('wrong'); return; }
+  const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold], id = faceId(Z, hit), face = Z.face[hit], prevGold = !!(Z.whole && Z.goldTop && !Z.streak && Z.goldId === prev); G.preWinTop = prev; const r = searchTap(Z, hit, how);
   if (!r.ok) return;                            // 'gone' приходит без opened
+  if (how){ G.wildArmed = false; spendCharge('wild'); tip(''); }
   if (r.gold) return searchWin(quad);
+  if (r.half !== undefined || r.piece !== undefined) wholeSpecial(r, quad, id, face);   // половинка / кусочек: не на отбой
+  else flyFx(id, quad, prev, Z.streak, { prevGold, goldTrail: !!(Z.whole && Z.goldTop) });
   if (r.done) return wholeWin(quad);
-  flyFx(Z.face[hit], quad, prev, Z.streak);
-  const t = now(), P = Z.P;                     // открывшиеся — волной от снятой карты, ближняя первой
+  const t = now(), P = Z.P, FX = CFG.FX, stepMs = FX.FLIP_STEP_MS * (Z.whole ? 1 - 0.5 * Math.min(1, Z.streak / FX.FLIP_FAST_AT) : 1);   // открывшиеся — волной от снятой карты, ближняя первой; с серией волна быстрее
   r.opened.filter(j => j !== Z.gold).sort((a, b) => Math.hypot(P.x[a] - P.x[hit], P.y[a] - P.y[hit]) - Math.hypot(P.x[b] - P.x[hit], P.y[b] - P.y[hit]))
-    .forEach((j, k) => { animCard(j, 1, t + CFG.FX.FLIP_DELAY_MS + CFG.FX.FLIP_STEP_MS * k); if (k < CFG.FX.FLIP_SOUND_MAX) Audio.flip(k); });
+    .forEach((j, k) => { animCard(j, 1, t + FX.FLIP_DELAY_MS + stepMs * k); if (k < FX.FLIP_SOUND_MAX) Audio.flip(k); });
+  if (Z.whole){ G.heatPt = { x: P.x[hit], z: P.y[hit] }; if (Z.streak >= FX.FIRE_AT && r.half === undefined){ const pz = quadPose(quad); burst(pz.x, pz.y, 4, 26, 420, Z.taps); } }   // «стог горит» — вокруг последней снятой; искры
   if (r.dust > 0){                              // золотая пыль: чем ближе к тузу, тем гуще, выше и звонче; разлёт от стороны туза не зависит
     const pz = quadPose(quad), n = Math.round(4 + 16 * r.dust); spawn('dust', n, pz.x, pz.y, { k: r.dust }, Z.taps); addFx({ kind: 'dust', dur: 1800 });   // fx — журнал
     const h0 = Math.min(G.heatLevel, heatLevel(heatNow(t)));   // ступень, до которой тепло остыло с прошлой пыли
@@ -4133,10 +4525,64 @@ function searchHit(hit){
       G.sfocusTw = { from: { ...G.sfocus }, to: { x: P.x[Z.gold], z: P.y[Z.gold] }, t0: t, ms: REDUCED ? 1 : CFG.FX.SEARCH_FIND_MS }; G.szTo = Math.min(G.szTo, CFG.FX.SEARCH_FIND_SZ); log('fx.start', 'cam.sfocus');
     }
   }
-  if (Z.streak >= CFG.COIN_STREAK_FROM) coins(1, curGeo().x, curGeo().y - 40, 'серия');
+  if (Z.streak >= CFG.COIN_STREAK_FROM && r.half === undefined) coins(Z.goldTop ? CFG.GOLD.BONUS_X : 1, curGeo().x, curGeo().y - 40, Z.goldTop ? 'серия ×' + CFG.GOLD.BONUS_X : 'серия');   // на золотой — ×2
   Audio.play(Z.streak); Audio.land(1, CFG.FLY_MS / 1000); buzz(r.opened.includes(Z.gold) ? 'aceOpen' : streakMile(Z.streak) ? 'milestone' : 'move'); G.lv.moves++;
   if (Z.whole) wholeAfterTap(t);
+  if (G.wholeTut) wholeTutStep('move');
   refreshData(); hud(); searchSave(false);
+}
+// урок «Одного стога» (первый стог, первые ходы): три короткие подсказки, рука показывает ход (hintTarget)
+function wholeTutStep(what){
+  const Z = G.srch, n = Z.taps - Z.draws;
+  if (what === 'draw'){ tip('Новая карта — серия с начала. Снимай ±1', 2500); return; }
+  if (n === 1) tip('Ещё одну — держи серию', 0);
+  else if (n === 3) tip('Серия: с 5-й карты — монеты, с 10-й — огонь. Нет хода — колода', 4000);
+  else if (n >= 6){ G.wholeTut = 0; G.save.seen.wholeTut = 1; save(); log('event', 'whole.tut.done'); }
+}
+// «Один стог»: взята половинка джокера или кусочек золотой (ядро уже посчитало): эффекты, подписи, монеты, коллекция в сейв
+function wholeSpecial(r, quad, id, face){
+  const Z = G.srch, t = now(), p = quadPose(quad);
+  if (r.half !== undefined){ const J = CFG.JOKERS[r.half], side = (face - FACE_HALF0) & 1;
+    addFx({ kind: 'halffly', k: r.half, id: J.id, side, pose: p, dur: CFG.FX.HALF_FLY_MS, info: J.id + ' side=' + side }); buzz('milestone');
+    if (r.joker !== undefined){ const ch = G.save.endless.charges = G.save.endless.charges || {}; ch[J.id] = (ch[J.id] || 0) + J.charges; G.save.whole.jokers = (G.save.whole.jokers || 0) + 1; save();
+      addFx({ kind: 'jokerasm', k: r.half, id: J.id, t0: t + CFG.FX.HALF_FLY_MS, dur: CFG.FX.JOKER_ASM_MS, info: J.id }); G.abilityPop[J.id] = t + CFG.FX.HALF_FLY_MS + CFG.FX.JOKER_ASM_MS - 300;
+      Audio.joker(); log('event', 'whole.joker', J.id + ' charges=' + ch[J.id]); }
+    else { addFx({ kind: 'halflabel', id: J.id, name: J.name, dur: CFG.FX.HALF_LABEL_MS, info: J.id }); Audio.aceOpen(); burst(p.x, p.y, 12, 40, 700, Z.taps); log('event', 'whole.half', J.id + ' n=' + Z.jok[r.half].got); }
+    return; }
+  const GD = Z.golds[r.piece], q = (face - FACE_PIECE0) % CFG.GOLD.PIECES, FX = CFG.FX;
+  addFx({ kind: 'piecefly', g: r.piece, q, cell: CELL_PIECE0 + CFG.GOLD.PIECES * r.piece + q, id: GD.id, pose: p, dur: FX.PIECE_FLY_MS, info: 'id=' + GD.id + ' q=' + q });
+  Audio.piece(GD.got); buzz('milestone');
+  if (r.assembled !== undefined){ G.save.gold.cards.push(r.assembled); G.save.whole.golds = (G.save.whole.golds || 0) + 1; save();
+    const t0 = t + FX.PIECE_FLY_MS + FX.FREEZE_MS; addFx({ kind: 'goldasm', g: r.piece, id: GD.id, t0, dur: FX.GOLD_ASM_MS, info: 'id=' + GD.id });
+    coins(CFG.GOLD.COIN_ASSEMBLE, VW / 2, H * 0.32, 'золотая', { rain: true, t0: t0 + 700 }); Audio.goldAsm((t0 - t) / 1000); log('event', 'whole.gold', 'id=' + GD.id + ' coll=' + G.save.gold.cards.length);
+    if (!G.save.seen.gold1) tipOnce('gold1', 'Золотая в колоде: выходит при доборе, монеты ×' + CFG.GOLD.BONUS_X, 4000); }
+  else log('event', 'whole.piece', 'id=' + GD.id + ' n=' + GD.got);
+}
+// способности джокеров в «Одном стоге» (заряды общие с кучами): «любая карта» — взвести, следующий тап снимает любую открытую
+// в яме; «магнит» — текущая меняется на подходящую к открытой в кадре, серия не рвётся; «метла» — две открытые карты кадра
+// (те, под которыми больше откроется) уходят без хода, текущая и серия те же
+function wholeAbility(id){
+  const Z = G.srch, ch = G.save.endless.charges; if (!Z || Z.won || G.phase !== 'play' || !(ch[id] > 0)) return;
+  Audio.ui(); log('input', 'joker.tap', id);
+  if (id === 'wild'){ G.wildArmed = !G.wildArmed; tip(G.wildArmed ? 'Любая карта: тапни любую открытую карту ямы' : '', G.wildArmed ? 0 : undefined); return; }
+  if (pxuNow() < 34){ tip('Подойди ближе к яме', 1500); Audio.wrong(); return; }
+  const near = wholeInView();
+  if (id === 'magnet'){
+    if (near.some(i => wholeFits(Z, i))){ tip('В кадре уже есть ход', 1800); return; }
+    const prev = Z.top, top = wholeMagnet(Z, near); if (top < 0){ tip('В кадре нет открытых карт', 1800); Audio.wrong(); return; }
+    spendCharge('magnet'); const d = deckGeo(), o = -1.2 * (deckLayers(0, true) - 1); addFx({ kind: 'deal', id: top, prev, x0: d.x + o, y0: d.y + o, dur: CFG.DEAL_MS }); addFx({ kind: 'magnet', x: d.x, y: d.y, dur: 900 }); burst(d.x, d.y - 20, 10, 40, 700, 991); Audio.coin(4); Audio.draw();
+    tip('Карта подходит — снимай, серия идёт', 2200); hud(); searchSave(false); return;
+  }
+  if (id === 'broom'){
+    const P = Z.P, cand = near.filter(i => !wholeIsHalf(Z.face[i])); if (!cand.length){ tip('Нечего сметать', 1500); Audio.wrong(); return; }
+    const below1 = (i) => { let n = 0; for (const j of P.below[i]) if (Z.alive[j] && Z.cover[j] === 1) n++; return n; };
+    cand.sort((a, b) => below1(b) - below1(a)); spendCharge('broom'); const t = now();
+    cand.slice(0, 2).forEach((i, k) => { const quad = cardQuad(i), cell = faceCells(Z, i)[0], r = wholeTap(Z, i, 'sweep'); if (!r.ok) return;
+      addFx({ kind: 'sweep', id: cell, pose: quadPose(quad), dir: k % 2 ? -1 : 1, t0: t + 90 * k, dur: 700 });
+      r.opened.sort((a, b) => Math.hypot(P.x[a] - P.x[i], P.y[a] - P.y[i]) - Math.hypot(P.x[b] - P.x[i], P.y[b] - P.y[i])).forEach((j, n) => { animCard(j, 1, t + CFG.FX.FLIP_DELAY_MS + CFG.FX.FLIP_STEP_MS * n); if (n < CFG.FX.FLIP_SOUND_MAX) Audio.flip(n); });
+      if (r.piece !== undefined) wholeSpecial(r, quad, faceId(Z, i), Z.face[i]); log('input', 'joker.sweep', 'card=' + i); if (r.done) wholeWin(quad); });
+    Audio.slide([]); refreshData(); hud(); wholeAfterTap(t); searchSave(false); return;
+  }
 }
 // «Один стог»: открытые карты в кадре (над панелью, под шапкой)
 function wholeInView(){
@@ -4161,8 +4607,9 @@ function wholeWin(quad){
   G.szTo = 1; aceTaken(quad, t); confetti(sv.runs * 7 + 3, t + CFG.FX.FREEZE_MS, 2400);
   coins(CFG.WHOLE.COIN_DONE, VW / 2, H * 0.32, 'стог разобран', { rain: true, t0: t + CFG.FX.FREEZE_MS });
   const ms = Math.round(G.srchElapsed); sv.lastMs = ms; sv.lastTaps = Z.taps; sv.lastDraws = Z.draws; sv.wins = (sv.wins || 0) + 1;
+  sv.lastBest = Z.best; sv.bestStreak = Math.max(sv.bestStreak || 0, Z.best); sv.lastGolds = Z.golds.filter(g => g.got >= CFG.GOLD.PIECES).map(g => g.id); sv.lastJokers = Z.jok.filter(j => j.got >= 2).map(j => CFG.JOKERS[j.k].id);
   if (!sv.best || ms < sv.best) sv.best = ms;
-  sv.seed = 0; sv.removed = []; sv.elapsed = 0; sv.taps = 0; sv.draws = 0; save();
+  sv.seed = 0; sv.removed = []; sv.faces = null; sv.elapsed = 0; sv.taps = 0; sv.draws = 0; sv.streak = 0; save();
   refreshData(); hud();
   log('event', 'whole.win', 'ms=' + ms + ' taps=' + Z.taps + ' draws=' + Z.draws);
 }
@@ -4170,10 +4617,13 @@ function heatNow(t){ return G.heatVal * Math.exp(-(t - G.heatAt) / 9000); }
 function heatLevel(h){ return h > 0.7 ? 3 : h > 0.4 ? 2 : h > 0.08 ? 1 : 0; }   // ступени слов таблички: тепло / теплее / горячо
 function searchDeck(){
   const Z = G.srch; if (!Z || Z.won) return;
-  const prev = Z.top, s0 = Z.streak, o = -1.2 * (deckLayers(0, true) - 1); searchDraw(Z, Z.whole ? wholeInView() : null); G.lv.draws++; deckPress();
-  const d = deckGeo(); addFx({ kind: 'deal', id: Z.top, prev, x0: d.x + o, y0: d.y + o, dur: CFG.DEAL_MS });
+  const prev = Z.top, s0 = Z.streak, o = -1.2 * (deckLayers(0, true) - 1), prevGold = !!(Z.whole && Z.goldTop && !s0 && Z.goldId === prev); searchDraw(Z, Z.whole ? wholeInView() : null); G.lv.draws++; deckPress();
+  const d = deckGeo(); addFx({ kind: 'deal', id: Z.top, prev, prevGold, gold: !!(Z.whole && Z.goldTop), x0: d.x + o, y0: d.y + o, dur: CFG.DEAL_MS });
+  if (Z.whole && s0 >= 3){ G.chainBreakAt = now(); addFx({ kind: 'chain.break', dur: CFG.FX.HEAT_OUT_MS, info: 'streak=' + s0 }); }   // выдох: камера назад, ореол гаснет (журнал)
+  if (Z.whole && Z.goldTop){ burst(d.x, d.y - 10, 10, 36, 600, Z.draws); Audio.goldDraw(); tip('Золотая ' + RANKS[rk(Z.top)] + ' из колоды — монеты ×' + CFG.GOLD.BONUS_X + ', пока идёт серия', 2600); log('event', 'whole.golddraw', 'id=' + Z.top); }
   if (s0 >= 3) Audio.streakBreak();
   Audio.draw(); Audio.land(0.7, CFG.DEAL_MS / 1000); buzz('deal'); hud(); searchSave(false);
+  if (G.wholeTut) wholeTutStep('draw');
 }
 function searchWin(quad){
   const Z = G.srch, t = now(), sv = G.save.search; G.phase = 'won'; G.phaseUntil = t + CFG.FX.SEARCH_WIN_MS; G.sighAt = t + 500; sighFrom(Z.gold, G.sighAt);
@@ -4194,31 +4644,36 @@ function searchWin(quad){
 function searchSave(force){
   const Z = G.srch; if (!Z || Z.won) return;
   if (!force && ++G.srchSaveN % 6) return;
-  const sv = Z.whole ? G.save.whole : G.save.search, rem = []; for (let i = 0; i < Z.P.N; i++) if (!Z.alive[i]) rem.push(i);
-  Object.assign(sv, { k: Z.k, seed: Z.seed, n: Z.P.N, removed: rem, top: Z.top, taps: Z.taps, draws: Z.draws, elapsed: Math.round(G.srchElapsed) }); save();
+  const sv = Z.whole ? G.save.whole : G.save.search, rem = []; if (!Z.whole) for (let i = 0; i < Z.P.N; i++) if (!Z.alive[i]) rem.push(i);
+  Object.assign(sv, { k: Z.k, seed: Z.seed, n: Z.P.N, removed: Z.whole ? Z.order.slice() : rem, top: Z.top, taps: Z.taps, draws: Z.draws, elapsed: Math.round(G.srchElapsed) });
+  if (Z.whole) Object.assign(sv, { faces: Array.from(Z.face), streak: Z.streak, best: Z.best, goal: Z.goal, goldTop: Z.goldTop, goldNext: Z.goldNext, bestStreak: Math.max(sv.bestStreak || 0, Z.best) });   // лица решённых, цепочка (в порядке снятия — яма растёт так же)
+  save();
 }
 // whole — «Один стог»: та же механика без туза, своя ячейка сейва, стог бесконечного режима
 function startSearch(k, whole){
   leaveMode(whole ? 'whole' : 'search');
   const sv = whole ? G.save.whole : G.save.search; k = whole ? 0 : k === undefined ? sv.k : k;
   const P = whole ? wholePile() : searchPile(k).P; setScenePile(P);
-  const mk = (seed) => whole ? wholeStart(seed) : searchStart(k, seed);
+  const mk = (seed) => whole ? wholeStart(seed, G.save.gold.cards) : searchStart(k, seed);
   let Z;
   if ((whole ? sv.n === P.N : sv.k === k) && sv.removed && sv.removed.length && sv.seed){        // продолжить: снятое — снова снято (без проверки рангов)
     Z = mk(sv.seed); Z.seed = sv.seed;
-    for (const i of sv.removed){ if (!Z.alive[i]) continue; Z.alive[i] = 0; Z.removed++; for (const j of Z.P.below[i]) if (Z.alive[j]) Z.cover[j]--; }
-    if (Z.zone){ for (const i of sv.removed) if (i >= 0 && i < Z.P.N) zoneGrow(Z, i); zoneEnsure(Z, []); }   // яма — вокруг снятых
-    Z.top = sv.top; Z.taps = sv.taps || 0; Z.draws = sv.draws || 0; Z.found = Z.gold >= 0 && Z.alive[Z.gold] && !Z.cover[Z.gold]; G.srchElapsed = sv.elapsed || 0;
+    if (whole) wholeRestore(Z, sv);               // лица, снятые в порядке снятия (яма — вокруг них), кусочки и половинки, серия и цель
+    else for (const i of sv.removed){ if (!Z.alive[i]) continue; Z.alive[i] = 0; Z.removed++; for (const j of Z.P.below[i]) if (Z.alive[j]) Z.cover[j]--; }
+    if (!whole) Z.top = sv.top; Z.taps = sv.taps || 0; Z.draws = sv.draws || 0; Z.found = Z.gold >= 0 && Z.alive[Z.gold] && !Z.cover[Z.gold]; G.srchElapsed = sv.elapsed || 0;
   } else {
     sv.runs = (sv.runs || 0) + 1; const seed = whole ? 9000 + sv.runs : 5000 + k * 101 + sv.runs; Z = mk(seed); Z.seed = seed; sv.k = k; sv.seed = seed; sv.removed = []; sv.n = P.N; G.srchElapsed = 0;
   }
   G.wholeMile = whole ? Math.floor(Z.removed / P.N / CFG.WHOLE.MILE) : 0; G.pileH = 1;   // стог поиска — во весь рост: оседает по-настоящему, снятыми картами
+  if (whole) paintPieces(Z);
   G.mode = 'search'; G.srch = Z; G.run = null; G.li = -1; G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; dropFx(); trayReset(); G.lv = newLevelMetrics(-1);
   G.glintCov = null; G.glintSeenAt = G.glintStepAt = -1e9; G.srchNearAt = 0;
   G.aliveNow = Z.alive; clearAnims(); refreshData(); S.mesh.material.uniforms.uDim.value = 0; S.mesh.material.uniforms.uFaceRot.value = 0; S.faceRot = 0;
-  G.sz = G.szTo = Z.removed ? 0.3 : 1; G.sfocus = { x: 0, z: 0 }; G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
+  G.sz = Z.removed ? 0.3 : 1; G.szTo = whole ? 0.3 : G.sz; G.sfocus = { x: 0, z: 0 };   // «Один стог»: новый стог показывается целиком и камера сама подлетает к верхушке G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
   G.phase = 'play'; goto('game'); save();
-  tip(whole ? (Z.removed ? 'Продолжаем стог' : 'Яма начинается на верхушке — тапни её') : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
+  G.wholeTut = whole && !G.save.seen.wholeTut && !Z.removed ? 1 : 0;   // урок на первых ходах (коротко: снимай ±1, держи серию)
+  G.chainZoomK = 1; G.heatK = 0; G.heatPt = { x: 0, z: 0 }; G.chainBreakAt = -1e9;
+  tip(whole ? (G.wholeTut ? 'Тапни карту на 1 больше или меньше, чем на отбое' : Z.removed ? 'Продолжаем стог' : 'Яма начинается на верхушке — тапни её') : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', G.wholeTut ? 0 : 6000);
   hud(); log('event', whole ? 'whole.start' : 'search.start', 'pile=' + (k + 1) + ' n=' + P.N + ' resumed=' + !!Z.removed);
 }
 function fmtClock(ms){ const s0 = Math.floor(ms / 1000); return Math.floor(s0 / 60) + ':' + String(s0 % 60).padStart(2, '0'); }
@@ -4226,7 +4681,7 @@ function nodeCover(i){ if (G.covFor === G.aliveNow && !G.covDirty) return G.covN
 function showLoupe(i, d){
   const q = G.nodeOf ? G.nodeOf[i] : -1, st = G.st, L = G.L, c = $('loupe-cv').getContext('2d'), Z = G.srch;
   let cell, txt;
-  if (G.mode === 'search' && Z){ if (i === Z.gold){ cell = CELL_GOLD; txt = Z.cover[i] ? 'что-то блестит…' : 'золотой туз!'; } else if (Z.cover[i]){ cell = CELL_BACK; txt = 'на ней ' + Z.cover[i] + ' ' + plural(Z.cover[i], 'карта', 'карты', 'карт'); } else { cell = Z.face[i]; txt = ok(rk(Z.top), rk(Z.face[i])) ? 'можно снять' : 'не подходит'; } }
+  if (G.mode === 'search' && Z){ if (i === Z.gold){ cell = CELL_GOLD; txt = Z.cover[i] ? 'что-то блестит…' : 'золотой туз!'; } else if (Z.cover[i]){ cell = CELL_BACK; txt = 'на ней ' + Z.cover[i] + ' ' + plural(Z.cover[i], 'карта', 'карты', 'карт'); } else if (Z.face[i] < 0 || (Z.zone && !Z.zone[i])){ cell = CELL_BACK; txt = 'за краем ямы'; } else { cell = faceCells(Z, i)[0]; txt = Z.whole ? (wholeIsHalf(Z.face[i]) ? 'половинка джокера' : wholeFits(Z, i) ? 'можно снять' : 'не подходит') : ok(rk(Z.top), rk(Z.face[i])) ? 'можно снять' : 'не подходит'; } }
   else if (q === L.goldIdx){ cell = CELL_GOLD; txt = L.joker ? 'радужный джокер' : 'золотой туз'; }
   else if (q >= 0 && st.present[q] && st.cover[q] > 0){ cell = CELL_BACK; txt = st.cover[q] === 1 ? 'на ней одна карта' : 'на ней ' + st.cover[q] + ' ' + plural(st.cover[q], 'карта', 'карты', 'карт'); }
   else if (q >= 0 && st.present[q]){ cell = st.tab[q]; txt = ok(rk(st.top), rk(st.tab[q])) ? 'можно снять' : 'не подходит'; }
@@ -4314,6 +4769,13 @@ function tick(t, fromRaf){
   if (G.screen === 'menu' && !camTw && home && home.kind === 'over') CAM.yaw += CFG.FX.MENU_SPIN * fdt / 1000;   // стог медленно крутится за меню
   G.szK = fk(0.16);
   // поиск: туз открылся за кадром — точка взгляда доезжает до него (драг снимает довод)
+  { const Zw = G.mode === 'search' && G.srch && G.srch.whole ? G.srch : null, st = Zw && !Zw.won ? Zw.streak : 0;   // фил серии: наезд и «стог горит» — плавно к уставке, срыв — быстрее
+    const FXc = CFG.FX, zTo = Zw ? 1 - (1 - FXc.CHAIN_ZOOM) * Math.min(1, st / FXc.CHAIN_ZOOM_AT) : 1, hTo = Zw && st >= FXc.FIRE_AT ? Math.min(1, 0.45 + 0.055 * (st - FXc.FIRE_AT)) : 0;
+    const breaking = t - G.chainBreakAt < FXc.HEAT_OUT_MS;
+    G.chainZoomK += (zTo - G.chainZoomK) * (REDUCED ? 1 : fk(breaking || zTo > G.chainZoomK ? 0.12 : 0.04));
+    G.heatK += (hTo - G.heatK) * (REDUCED ? 1 : fk(hTo > G.heatK ? 0.06 : 0.1));
+    if (Math.abs(G.chainZoomK - 1) < 1e-4) G.chainZoomK = 1;
+    S.mesh.material.uniforms.uHeat.value.set(G.heatPt.x, G.heatPt.z, CFG.FX.HEAT_R, REDUCED ? 0 : G.heatK); }
   const sf = G.sfocusTw;
   if (sf){ const q = Math.min(1, (t - sf.t0) / sf.ms), e = easeOutCubic(q); G.sfocus.x = sf.from.x + (sf.to.x - sf.from.x) * e; G.sfocus.z = sf.from.z + (sf.to.z - sf.from.z) * e;
     if (q >= 1 || G.mode !== 'search'){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); } }
@@ -4449,12 +4911,20 @@ window.STOG = {
     const P = Z.P, f = G.sfocus; let b = pl[0], bd = 1e9; for (const i of pl){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.z); if (d < bd){ bd = d; b = i; } }
     G.sfocus = { x: P.x[b], z: P.y[b] }; if (G.szTo > 0.3) G.szTo = 0.1; searchHit(b); return b; },
   whole(frac){                                     // «Один стог»; frac — снять столько стога слоями сверху (без рангов), чтобы снять кадры середины и конца
-    startSearch(0, true); const Z = G.srch, P = Z.P;
-    while (frac && Z.removed < frac * P.N){ const open = []; for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i]) open.push(i);
-      for (const i of open){ if (Z.removed >= frac * P.N) break; Z.alive[i] = 0; Z.removed++; for (const j of P.below[i]) if (Z.alive[j]) Z.cover[j]--; } }
-    if (frac){ for (let i = 0; i < P.N; i++) if (!Z.alive[i]) zoneGrow(Z, i); zoneEnsure(Z, []); }
-    G.wholeMile = Math.floor(Z.removed / P.N / CFG.WHOLE.MILE); refreshData(); hud(); searchSave(true); return this.sstate(); },
+    startSearch(0, true); const Z0 = G.srch, P = Z0.P;
+    if (frac){ const alive = Z0.alive.slice(), cover = Z0.cover.slice(), order = Z0.order.slice(); let removed = Z0.removed;
+      while (removed < frac * P.N){ const open = []; for (let i = 0; i < P.N; i++) if (alive[i] && !cover[i]) open.push(i);
+        for (const i of open){ if (removed >= frac * P.N) break; alive[i] = 0; removed++; order.push(i); for (const j of P.below[i]) if (alive[j]) cover[j]--; } }
+      const Z = wholeRestore(wholeStart(Z0.seed, G.save.gold.cards), { faces: Array.from(Z0.face), removed: order, top: Z0.top, streak: 0, goal: Z0.goal }); Z.seed = Z0.seed; Z.taps = removed;
+      G.srch = Z; G.aliveNow = Z.alive; G.covDirty = true; clearAnims(); }
+    G.wholeMile = Math.floor(G.srch.removed / P.N / CFG.WHOLE.MILE); refreshData(); hud(); searchSave(true); return this.sstate(); },
   szoom(z){ if (G.srch){ G.szTo = G.sz = z; } return z; },   // поиск: зум (0 — карта ~72 px, 1 — вся куча)
+  // «Один стог»: открыть особую карту (kind 'half' | 'piece', n — какую по счёту), сняв всё над ней, и подвести камеру — кадры и проверка касаниями
+  wexpose(kind, n){ const Z = G.srch; if (!Z || !Z.whole) return null; const P = Z.P, list = kind === 'half' ? Z.jok.flatMap(j => j.cards) : Z.golds.flatMap(g => g.cards), i = list.filter(c => Z.alive[c])[n || 0]; if (i === undefined) return null;
+    const rm = (j) => { for (const k of P.above[j]) if (Z.alive[k]) rm(k); if (!Z.alive[j]) return; Z.alive[j] = 0; Z.removed++; Z.order.push(j); for (const k of P.below[j]) if (Z.alive[k]) Z.cover[k]--; zoneEnsure(Z, zoneGrow(Z, j)); };
+    for (const k of P.above[i]) if (Z.alive[k]) rm(k); Z.zone[i] = 1; for (const k of P.below[i]) Z.zone[k] = 1;
+    for (let j = 0; j < P.N; j++) if (Z.alive[j] && !Z.cover[j] && Z.zone[j] && Z.face[j] === FACE_NONE) Z.face[j] = Math.floor(Z.R() * 52);
+    if (kind === 'piece'){ const r = wholeRank(Z, i); Z.top = (r + 1) % 13; } G.sfocus = { x: P.x[i], z: P.y[i] }; G.szTo = G.sz = 0.1; G.covDirty = true; clearAnims(); refreshData(); hud(); return i; },
   sstate(){ const Z = G.srch; return Z ? { pile: Z.k + 1, n: Z.P.N, removed: Z.removed, taps: Z.taps, onGold: Z.cover[Z.gold], found: Z.found, won: Z.won, sz: +G.sz.toFixed(2), ys: +S.ys.toFixed(2), pxu: Math.round(pxuNow()), heat: +heatNow(now()).toFixed(2), ms: Math.round(G.srchElapsed), phase: G.phase, screen: G.screen } : null; },
   sbot(){ const Z = G.srch; if (!Z || Z.won) return null; if (Z.found){ G.preWinTop = Z.top; searchTap(Z, Z.gold); searchWin(cardQuad(Z.gold)); return 'gold'; }
     const pl = searchPlayable(Z).filter(i => i !== Z.gold); if (!pl.length){ searchDeck(); return 'deck'; }
@@ -4462,7 +4932,8 @@ window.STOG = {
     G.sfocus = { x: P.x[best], z: P.y[best] }; G.szTo = G.sz = 0.1; searchCam(); placeCamera(now()); const c = cardCenter(best); searchTapAt({ x: c.x, y: c.y }); return best; },
   spark(){ sparkFound(); return G.phase; },
   tap(q){ if (G.phase === 'play') playNode(q, 'hook'); return this.state(); },
-  deck(){ deckTap(); return this.state(); },
+  deck(){ if (G.mode === 'search') searchDeck(); else deckTap(); return this.state(); },
+  whit(i){ if (G.mode === 'search' && G.srch && G.phase === 'play') searchHit(i); return this.sstate(); },   // тап по карте поиска / «Одного стога» минуя экран (кадры, проверки)
   bot(){                                           // один ход жадного бота (или колода)
     if (G.phase === 'over'){ sparkFound(); return 'spark'; }
     if (G.phase === 'offer'){ takePlus5(); return 'plus5'; }
