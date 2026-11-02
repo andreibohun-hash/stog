@@ -1955,8 +1955,19 @@ function drawPiece(c, x, y, w, h, far, id, q){
   const edge = () => { c.moveTo(ox, oy); c.lineTo(mx, oy); tearPath(c, mx, oy, mx, my, 6, amp); tearPath(c, mx, my, ox, my, 4, amp); };   // наружный угол → по верху к середине → рваный край вниз и к краю
   c.save(); c.beginPath(); edge(); c.closePath(); c.clip(); drawGoldCard(c, x, y, w, h, far, id); c.restore();
   c.strokeStyle = 'rgba(255,255,255,.9)'; c.lineWidth = far ? 4 : 2.5; c.beginPath(); c.moveTo(mx, oy); tearPath(c, mx, oy, mx, my, 6, amp); tearPath(c, mx, my, ox, my, 4, amp); c.stroke();
-  if (!far){ const bx = x + (qx ? w * 0.25 : w * 0.75), by = y + (qy ? h * 0.3 : h * 0.7);   // номер — в пустой четверти по диагонали
-    c.fillStyle = 'rgba(90,70,40,.5)'; c.font = '900 24px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(q + 1) + '/' + CFG.GOLD.PIECES, bx, by); }
+  // силуэт ранга и масть целиком на каждой четверти (Андрей 02.11 v26: «непонятно, чем её собрать можно»): в размере ранга обычной
+  // карты, золотистый полупрозрачный с тёмной каймой — читается и по бумаге, и по золотой четверти
+  drawPieceRank(c, id, x, y, w, h, far);
+  if (!far){ const bx = x + (qx ? w * 0.18 : w * 0.82), by = y + (qy ? h * 0.12 : h * 0.9);   // номер четверти — мелко в дальнем от четверти углу
+    c.fillStyle = 'rgba(90,70,40,.6)'; c.font = '900 15px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(q + 1) + '/' + CFG.GOLD.PIECES, bx, by); }
+}
+function drawPieceRank(c, id, x, y, w, h, far){
+  const r = rk(id), su = Math.floor(id / 13) % 4, ten = r === 9, ul = r === 5 || r === 8, base = y + h * (far ? 0.68 : 0.64), size = Math.round(h * (far ? 0.8 : 0.72)), mw = w * 0.86;
+  c.save(); c.globalAlpha = far ? 0.8 : 0.72;
+  c.fillStyle = 'rgba(70,40,5,.9)'; for (const [dx, dy] of [[-2.5, 0], [2.5, 0], [0, -2.5], [0, 2.5]]) drawRank(c, RANKS[r], x + w / 2 + dx, base + dy, size, mw, ul, ten);   // кайма
+  c.fillStyle = '#ffd86a'; drawRank(c, RANKS[r], x + w / 2, base, size, mw, ul, ten);
+  if (!far){ c.fillStyle = 'rgba(70,40,5,.9)'; drawSuit(c, su, x + w / 2 + 1.5, y + h * 0.84 + 1.5, h * 0.17); c.fillStyle = '#ffd86a'; drawSuit(c, su, x + w / 2, y + h * 0.84, h * 0.17); }
+  c.restore();
 }
 // атлас изменился (ячейки золота, кусочков): текстура и копия для 2D — заново
 function atlasChanged(){
@@ -3741,6 +3752,7 @@ function drawGoldSlot(c, t){
   if (got.length) glowCard(c, GLOW.gold, 0, 0, sl.w, sl.h, 4, 0.12 + 0.08 * got.length / CFG.GOLD.PIECES * pulse);
   c.fillStyle = 'rgba(20,15,5,.45)'; rr(c, -sl.w / 2, -sl.h / 2, sl.w, sl.h, 5); c.fill();
   for (const q of got) drawGoldQuarter(c, GD.id, q, sl.w, sl.h);
+  if (got.length < CFG.GOLD.PIECES) drawPieceRank(c, GD.id, -sl.w / 2, -sl.h / 2, sl.w, sl.h, true);   // тот же силуэт ранга, что на кусочках
   c.setLineDash([3, 3]); c.lineWidth = 1.5; c.strokeStyle = 'rgba(255,230,160,.7)'; rr(c, -sl.w / 2, -sl.h / 2, sl.w, sl.h, 5); c.stroke(); c.setLineDash([]);
   c.fillStyle = PAL.goldText; c.font = '900 11px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'top';
   const r = rk(GD.id), lbl = RANKS[r], lw = c.measureText(lbl).width; c.fillText(lbl, -7, sl.h / 2 + 4); drawSuit(c, Math.floor(GD.id / 13) % 4, -7 + lw / 2 + 7, sl.h / 2 + 10, 5);
