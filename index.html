@@ -37,6 +37,9 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:16px/1
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
 #game{position:absolute;inset:0;touch-action:none}
 #game canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#gl{opacity:0;transition:opacity .4s}   /* GL появляется, когда шейдеры собраны: меню показывается раньше (boot) */
+#frame.gl-ready #gl{opacity:1}
+#frame:not(.gl-ready) #logo small::after{content:' · стог укладывается…'}   /* пока шейдеры собираются, меню уже живое */
 #ui{pointer-events:none}
 header{position:absolute;left:0;right:0;top:env(safe-area-inset-top);display:flex;align-items:center;gap:8px;padding:8px 10px;pointer-events:none;z-index:3;color:#fff7e6}
 header .title{flex:1;text-align:center;line-height:1.05;text-shadow:0 1px 3px rgba(0,0,0,.6)}
@@ -169,7 +172,7 @@ table.res tr.tot td{border-bottom:0;color:var(--accent)}
   <div id="tip"></div>
   <div id="loupe"><canvas id="loupe-cv" width="144" height="202"></canvas><small id="loupe-txt"></small></div>
   <div id="loading">Стог укладывается…</div>
-  <div id="overlay"><div id="logo"><b>СТ<canvas id="logo-ace" width="60" height="84"></canvas>Г</b><small>3 000 карт · цепочки, джокеры, золото</small></div><div class="card" id="card"></div></div>
+  <div id="overlay"><div id="logo"><b>СТ<canvas id="logo-ace" width="60" height="84"></canvas>Г</b><small>стога 1 000 → 3 000 карт · цепочки, джокеры, золото</small></div><div class="card" id="card"></div></div>
   <div id="toast" class="hide"></div>
 </div>
 <!-- three.js 0.185.1, вендорен файлом (CJS-сборка + шим exports → window.THREE). CDN не используется. -->
@@ -1488,6 +1491,9 @@ const now = () => performance.now();
 function log(kind, name, info){            // журнал [game] — одна строка на событие (§11)
   console.log('[game] ' + JSON.stringify({ t: +((now() - T0) / 1000).toFixed(3), kind, name, info: info === undefined ? '' : String(info) }));
 }
+// замер этапов старта и входа в режим: журнал kind 'perf' (мс с прошлой метки); PERF_T — время прошлой метки
+let PERF_T = 0;
+function perf(name, info){ const t = now(); log('perf', name, Math.round(t - PERF_T) + 'ms' + (info ? ' ' + info : '')); PERF_T = t; }
 const SAVE_KEY = NAME + '.v1';
 function loadSave(){ try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch (e) { return {}; } }
 function save(){ try { localStorage.setItem(SAVE_KEY, JSON.stringify(G.save)); } catch (e) {} }
@@ -1552,6 +1558,7 @@ const G = {
   wildArmed: false, halfWinAt: -1e9, jokerType: null,   // джокеры: «Любая карта» взведена; взята половинка; собранный (для надписи)
   wholeTut: 0, wholeMile: 0,   // «Один стог»: идёт урок первых ходов; последняя отмеченная веха (каждые WHOLE.MILE)
   abilityPop: {},          // кнопки способностей: когда появилась (пружинка) — по id джокера
+  glReady: false,          // шейдеры собраны (boot): до этого кадр GL не рисуется, меню уже показано
   chainZoomK: 1, heatK: 0, heatPt: { x: 0, z: 0 }, labelSparkAt: -1e9, chainBreakAt: -1e9, hS: null,   // hS — сглаженная высота стога под точкой взгляда (searchCam)   // фил серии: наезд камеры, сила «стог горит» и его центр, искры подписи, момент срыва
   pileIntro: null, pileMove: null, jokerWinAt: -1e9,   // кучи: табличка новой кучи { t0, k, N, left }; переезд к следующей { P, off, mesh, run, L }; взят джокер
 };
@@ -2340,7 +2347,7 @@ function initScene(){
   S.renderer.setClearColor(0x1b200f, 1);
   // дальняя плоскость CAM_FAR: на общем плане при наклоне 0,5 и щипке ×1,6 верхний луч кадра падает на землю в ~580 от камеры
   S.scene = new THREE.Scene(); S.camera = new THREE.PerspectiveCamera(CFG.FOV, 1, 0.1, CFG.FX.CAM_FAR);
-  S.atlas = buildAtlas();
+  PERF_T = now(); S.atlas = buildAtlas(); perf('scene.atlas');
   const tex = new THREE.CanvasTexture(S.atlas); tex.colorSpace = THREE.NoColorSpace; tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.anisotropy = Math.min(8, S.renderer.capabilities.getMaxAnisotropy());
   S.mat = new THREE.ShaderMaterial({ vertexShader: VS, fragmentShader: FS, side: THREE.DoubleSide, uniforms: {   // DoubleSide — переворот не дырявит яму
@@ -4746,9 +4753,9 @@ function wholeLive(){ const sv = G.save.whole; return !!(sv.seed && sv.removed &
 function wholeNextN(){ const sv = G.save.whole; return wholeLive() ? sv.n : wholeSize((sv.runs || 0) + 1); }
 // whole — «Один стог»: та же механика без туза, своя ячейка сейва, свой стог по размеру
 function startSearch(k, whole){
-  leaveMode(whole ? 'whole' : 'search');
+  PERF_T = now(); leaveMode(whole ? 'whole' : 'search'); perf('start.leave');
   const sv = whole ? G.save.whole : G.save.search; k = whole ? 0 : k === undefined ? sv.k : k;
-  const P = whole ? wholePile(wholeNextN()) : searchPile(k).P; setScenePile(P);
+  const P = whole ? wholePile(wholeNextN()) : searchPile(k).P; perf('start.pile', 'N=' + P.N); setScenePile(P); perf('start.scene');
   const mk = (seed) => whole ? wholeStart(seed, G.save.gold.cards, false, P.N) : searchStart(k, seed);
   let Z;
   if ((whole ? sv.n === P.N : sv.k === k) && sv.removed && sv.removed.length && sv.seed){        // продолжить: снятое — снова снято (без проверки рангов)
@@ -4759,17 +4766,18 @@ function startSearch(k, whole){
   } else {
     sv.runs = (sv.runs || 0) + 1; const seed = whole ? 9000 + sv.runs : 5000 + k * 101 + sv.runs; Z = mk(seed); Z.seed = seed; sv.k = k; sv.seed = seed; sv.removed = []; sv.n = P.N; G.srchElapsed = 0;
   }
+  perf('start.state', 'resumed=' + !!Z.removed);
   G.wholeMile = whole ? Math.floor(Z.removed / P.N / CFG.WHOLE.MILE) : 0; G.pileH = 1;   // стог поиска — во весь рост: оседает по-настоящему, снятыми картами
-  if (whole) paintPieces(Z);
+  if (whole) paintPieces(Z); perf('start.pieces');
   G.mode = 'search'; G.srch = Z; G.run = null; G.li = -1; G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; dropFx(); trayReset(); G.lv = newLevelMetrics(-1);
   G.glintCov = null; G.glintSeenAt = G.glintStepAt = -1e9; G.srchNearAt = 0;
-  G.aliveNow = Z.alive; clearAnims(); refreshData(); S.mesh.material.uniforms.uDim.value = 0; S.mesh.material.uniforms.uFaceRot.value = 0; S.faceRot = 0;
+  G.aliveNow = Z.alive; clearAnims(); refreshData(); perf('start.refresh', 'touchGraph+tones'); S.mesh.material.uniforms.uDim.value = 0; S.mesh.material.uniforms.uFaceRot.value = 0; S.faceRot = 0;
   G.sz = Z.removed ? 0.3 : 1; G.szTo = whole ? 0.3 : G.sz; G.sfocus = { x: 0, z: 0 };   // «Один стог»: новый стог показывается целиком и камера сама подлетает к верхушке G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
   G.phase = 'play'; goto('game'); save();
   G.wholeTut = whole && !G.save.seen.wholeTut && !Z.removed ? 1 : 0;   // урок на первых ходах (коротко: снимай ±1, держи серию)
   G.chainZoomK = 1; G.heatK = 0; G.heatPt = { x: 0, z: 0 }; G.chainBreakAt = -1e9; G.hS = null;
   tip(whole ? (G.wholeTut ? '' : Z.removed ? 'Продолжаем стог' : 'Яма начинается на верхушке — тапни её') : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
-  hud(); log('event', whole ? 'whole.start' : 'search.start', 'pile=' + (k + 1) + ' n=' + P.N + ' resumed=' + !!Z.removed);
+  hud(); perf('start.done'); log('event', whole ? 'whole.start' : 'search.start', 'pile=' + (k + 1) + ' n=' + P.N + ' resumed=' + !!Z.removed);
 }
 function fmtClock(ms){ const s0 = Math.floor(ms / 1000); return Math.floor(s0 / 60) + ':' + String(s0 % 60).padStart(2, '0'); }
 function nodeCover(i){ if (G.covFor === G.aliveNow && !G.covDirty) return G.covNow[i] > 0 ? 1 : 0; const P = SP(); for (const j of P.above[i]) if (G.aliveNow[j]) return 1; return 0; }
@@ -4904,7 +4912,7 @@ function tick(t, fromRaf){
   // (иначе въезжает ступеньками); панель и 2D — каждый кадр
   const glFps = G.screen === 'menu' ? FX.GL_FPS_MENU : BACKDROP_SCREENS.includes(G.screen) ? FX.GL_FPS_BACK : 0;
   const settled = G.screen === 'menu' ? u.uBackdrop.value <= 1 - FX.GL_SETTLED : u.uBackdrop.value >= FX.GL_SETTLED;
-  const drawGL = !(glFps && settled && !camTw && t - glAt < 1000 / glFps - 4);
+  const drawGL = G.glReady && !(glFps && settled && !camTw && t - glAt < 1000 / glFps - 4);   // до сборки шейдеров (boot) GL не рисуется — иначе синхронная компиляция в кадре
   if (drawGL){
     // тени — заново, когда свет по горизонтали повернулся вместе с камерой (рыскание и наклон: драг, нырок, возврат орбиты, доводка
     // кадра) или в поиске сдвинулась точка взгляда
@@ -5077,38 +5085,46 @@ window.STOG = {
 // Старт: шрифт → стог (граф перекрытий из сима) → укладка → атлас → сцена → прогрев отрисовкой
 // ---------------------------------------------------------------------------
 async function boot(){
-  const t0 = now();
+  const t0 = now(); PERF_T = t0; perf('boot.script', 'since T0=' + Math.round(t0 - T0) + 'ms');
   try { await Promise.race([document.fonts.load('900 100px Nunito'), new Promise(r => setTimeout(r, 1500))]); } catch (e) {}
-  const t1 = now(); pile(); const tPile = now() - t1;   // стог теста строится при загрузке
-  makeSprites(); fit(); initScene(); fit();
+  perf('boot.fonts');
+  const t1 = now(); pile(); const tPile = now() - t1; perf('boot.pile10k');   // стог теста строится при загрузке
+  makeSprites(); perf('boot.sprites'); fit(); initScene(); fit(); perf('boot.initScene', 'atlas+lay');
   try { S.atlasBmp = await createImageBitmap(S.atlas); } catch (e) { S.atlasBmp = null; }   // без createImageBitmap 2D рисует прямо с S.atlas
+  perf('boot.atlasBmp');
   G.aliveNow = aliveFromSave(); refreshData(); G.coinsShown = G.save.coins; G.pileH = pileHTarget();   // за меню — куча из сейва уже осевшей
+  perf('boot.refresh');
   envPop(1);   // луг вокруг кучи вырастает при запуске
+  // меню — сразу, до компиляции шейдеров (Андрей 02.11: «долго запускаться»; на холодном старте компиляция — 3,6 с из 5 на стенде):
+  // кадр GL до готовности не рисуется (tick: G.glReady), холст прозрачный и проявляется, когда шейдеры собраны
+  const hOver0 = overHome(Math.min(G.save.level, LEVELS.length - 1)); Object.assign(CAM, hOver0); home = { ...hOver0 }; placeCamera(now());
+  perf('boot.warm2d0'); $('loading').className = 'hide'; hud();
+  const h = location.hash.slice(1); routeHash(h || 'menu'); perf('boot.menu', 'total=' + Math.round(now() - t0) + 'ms');
+  requestAnimationFrame(frame);
   // прогрев до первого нырка: все меши в сцене и видимы — земля, контактная тень (count 1), ореол; шейдеры собираются заранее
   // (compileAsync — без блокировки, подпись загрузки не замирает). Кадры: общий план, яма (затемнение, тень и ореол включены —
   // все ветки шейдеров), общий план. 2D — атлас, спрайты и шрифт по пикселю
-  const hOver = overHome(Math.min(G.save.level, LEVELS.length - 1)); Object.assign(CAM, hOver); home = { ...hOver }; placeCamera(now());
+  const hOver = hOver0, camKeep = { ...CAM }, homeKeep = home && { ...home };   // прогрев: камера на время прогрева в общем плане и в яме, потом как была (меню уже могло отъехать)
   const U = S.mat.uniforms, shA = S.shMat.uniforms.uA, hg = S.haloMat.uniforms.uGlow;
   const warmMeshes = (on) => { S.shMesh.count = on ? 1 : 0; S.halo.visible = on;
     if (on){ S.shMesh.setMatrixAt(0, _shM.fromArray(S.mats, 0)); S.shMesh.instanceMatrix.needsUpdate = true; S.halo.matrix.fromArray(S.mats, 0); S.halo.matrixWorldNeedsUpdate = true; } };
   warmMeshes(true);
   try { if (S.renderer.compileAsync) await Promise.race([S.renderer.compileAsync(S.scene, S.camera), new Promise(r => setTimeout(r, 4000))]); else S.renderer.render(S.scene, S.camera); } catch (e) {}   // 4 с — страховка от драйвера, который не скажет «готово»
-  const L0 = levelPit(Math.min(G.save.level, LEVELS.length - 1));
+  perf('boot.compile');
+  const L0 = levelPit(Math.min(G.save.level, LEVELS.length - 1)); perf('boot.levelPit');
   for (const pit of [false, true, false]){
     Object.assign(CAM, pit ? pitHome(L0) : hOver); placeCamera(now()); warmMeshes(true);   // placeCamera без ямы прячет ореол
     U.uDim.value = pit ? 1 : 0; shA.value = pit ? CFG.FX.SHADOW_A : 0; hg.value = pit ? CFG.FX.HALO_PIT : 0;
     S.renderer.render(S.scene, S.camera);
   }
-  U.uDim.value = 0; shA.value = 0; hg.value = 0; warmMeshes(false);
+  U.uDim.value = 0; shA.value = 0; hg.value = 0; warmMeshes(false); Object.assign(CAM, camKeep); if (homeKeep) home = homeKeep; placeCamera(now()); perf('boot.warmGL');
   // спрайты под размер экрана (панель, монета, шапка) появятся в первом fit() с ненулевым #game (скрытый iframe, webview не
   // разложился) — пустые пропускаем; прогрев 2D не должен остановить старт
   const c = uctx;
   try { c.setTransform(1, 0, 0, 1, 0, 0); c.drawImage(S.atlasBmp || S.atlas, 0, 0, 8, 8, 0, 0, 1, 1);
     for (const sp of [GLOW.warm, GLOW.gold, GLOW.white, GLOW.cold, STAR, DOT.cream, DOT.puff, RAYS, PILLAR, SHADOW, TRAY_BG, COIN_SPR, HEAD_BG, ...CONF, ...MINI]) if (sp && sp.width && sp.height) c.drawImage(sp, 0, 0, 1, 1, 0, 0, 1, 1);
     c.font = '900 13px ' + FONT; c.fillText('0', -9, -9); c.clearRect(0, 0, uicv.width, uicv.height); } catch (e) { log('event', 'warm2d.fail', String(e && e.message || e)); }
-  $('loading').className = 'hide'; hud();
-  const h = location.hash.slice(1); routeHash(h || 'menu');
-  requestAnimationFrame(frame);
+  perf('boot.warm2d'); G.glReady = true; $('frame').classList.add('gl-ready'); log('fx.start', 'gl.fadein', 'ms=400');
   log('event', 'boot', 'levels=' + LEVELS.length + ' pile=' + Math.round(tPile) + 'ms total=' + Math.round(now() - t0) + 'ms');
 }
 setTimeout(boot, 20);
