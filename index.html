@@ -291,8 +291,11 @@ const CFG = {
                           //   Подбор — `node sim.mjs whole` (OPEN= из среды), см. DESIGN
     ZONE0: 2.8,           //   старт: карты не дальше этого радиуса от верхушки (по порядку расстояния — до OPEN_TARGET открытых)
     GROW: 2.4,            //   предел радиуса, в котором снятая карта добирает карты в яму (до OPEN_TARGET открытых); вне ямы не снимаются
-    OUT_DIM: 0.5,         //   яркость закрытых вне ямы (в яме закрытые — 1 − 0,04 на карту сверху)
-    OUT_FACE: 0.4,        //   открытые вне ямы — лицом, но тёмные (как вне ямы в бесконечном): видно, что свободна, но не в яме
+    OUT_DIM: 0.5,         //   яркость закрытых вне ямы
+    OUT_FACE: 0.6,        //   открытые вне ямы — рубашкой посветлее: видно, что карта свободна, но не в яме (лицо решится, когда яма дорастёт)
+    DEPTH_STEP: 0.04,     //   закрытые в яме: 1 − столько на каждую карту ямы сверху (логическое покрытие, порог OVERLAP_MIN)…
+    DEPTH_MIN: 0.55,      //   …но не темнее этого. Затем тон поднимается вверх по графу любого касания (wholeTones): карта не темнее
+                          //   того, на чём физически лежит, — тёмная не бывает поверх светлой, открытая не выглядит накрытой (Андрей 02.11 v26)
     MILE: 0.1,            //   праздник каждые столько стога: монеты и строка «разобрано N%»
     MILE_COINS: 10,
     COIN_DONE: 200,       //   монет за разобранный стог
@@ -1238,6 +1241,32 @@ function wholeForce(S, kind, i){
   if (i === undefined || i < 0) return -1;
   const it = S.sched.splice(n, 1)[0]; S.sched.splice(S.schedN, 0, it); S.schedN++; S.face[i] = wholeSpecialFace(it);
   if (it.kind === 'half') S.jok[it.k].cards[it.side] = i; else S.golds[it.g].cards[it.q] = i; return i;
+}
+// граф любого касания (без порога перекрытия): tAbove[i] — карты, физически лежащие на i (упали позже и пересекаются хоть краешком),
+// tBelow — наоборот. Для тона: рисуется-то карта по физической высоте. Считается раз на кучу
+function touchGraph(P){
+  if (P.tAbove) return P;
+  const N = P.N, x = P.x, y = P.y, tA = Array.from({ length: N }, () => []), tB = Array.from({ length: N }, () => []);
+  for (let i = 0; i < N; i++){
+    const gx = Math.floor(x[i] / PILE_CELL), gy = Math.floor(y[i] / PILE_CELL);
+    for (let ax = gx - 1; ax <= gx + 1; ax++) for (let ay = gy - 1; ay <= gy + 1; ay++){
+      const list = P.grid.get(ckey(ax, ay)); if (!list) continue;
+      for (const j of list){ if (j <= i) continue; const dx = x[j] - x[i], dy = y[j] - y[i]; if (dx * dx + dy * dy > PILE_MAXD2) continue; if (overlap(P, i, j)){ tA[i].push(j); tB[j].push(i); } }
+    }
+  }
+  P.tAbove = tA; P.tBelow = tB; return P;
+}
+// тон карт «Одного стога» (яркость рубашки/лица, 0..1; снятые — 0): открытая в яме — 1; закрытая в яме — по числу карт ямы сверху;
+// вне ямы — OUT_DIM / OUT_FACE. Затем вверх по графу касания: тон карты не меньше тона всего, на чём она физически лежит
+function wholeTones(S){
+  const P = touchGraph(S.P), W = CFG.WHOLE, N = P.N, tone = new Float32Array(N);
+  for (let i = 0; i < N; i++){
+    if (!S.alive[i]) continue;
+    const cov = S.cover[i];
+    tone[i] = !S.zone[i] ? (cov ? W.OUT_DIM : W.OUT_FACE) : cov ? Math.max(W.DEPTH_MIN, 1 - W.DEPTH_STEP * cov) : 1;
+  }
+  for (let i = 0; i < N; i++){ if (!S.alive[i]) continue; let t = tone[i]; for (const j of P.tBelow[i]) if (S.alive[j] && tone[j] > t) t = tone[j]; tone[i] = t; }   // снизу вверх: индексы ниже — раньше
+  return tone;
 }
 // старт стога: seed — лица и график особых карт; coll — коллекция золотых карт (id), собранная раньше (выходят из колоды);
 // plain — простые случайные лица, без особых карт и цепочки (сим)
@@ -2432,15 +2461,15 @@ function faceCells(Z, i){
 function faceId(Z, i){ const f = Z.face[i]; return f < 52 ? f : wholeIsPiece(f) ? Z.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].id : -1; }
 // поиск: открытая — лицом, закрытая — рубашкой, туз — всегда золотом и блестит (сквозь щели тоже видно)
 function refreshSearch(){
-  const Z = G.srch, P = Z.P, a = S.aData.array;
+  const Z = G.srch, P = Z.P, a = S.aData.array, tones = Z.whole ? wholeTones(Z) : null;
   for (let i = 0; i < P.N; i++){
     const o = S.instOf[i] * 4;
     if (!Z.alive[i]){ a[o + 3] = -1; continue; }
     const cov = Z.cover[i];
     if (i === Z.gold){ a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = cov ? 0.85 : 1; a[o + 3] = 7; }
-    else if (Z.zone && !Z.zone[i]){                 // «Один стог»: вне ямы — темнее, яма читается светлым пятном; открытые за краем — рубашкой посветлее
-      a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = cov ? CFG.WHOLE.OUT_DIM : CFG.WHOLE.OUT_FACE; a[o + 3] = 2; }   // (лицо решится, когда яма дорастёт)
-    else if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.55, (Z.zone ? 1 : 0.9) - 0.04 * cov); a[o + 3] = 2; }
+    else if (Z.whole && (cov || !Z.zone[i])){        // «Один стог»: рубашка с тоном по слою и зоне, не темнее того, на чём лежит (wholeTones)
+      a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = tones[i]; a[o + 3] = 2; }
+    else if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.55, 0.9 - 0.04 * cov); a[o + 3] = 2; }
     else { const [cn, cf, sp] = faceCells(Z, i); a[o] = cn; a[o + 1] = cf; a[o + 2] = 1; a[o + 3] = sp ? 7 : 3; }   // особые карты (половинка, кусочек) блестят, как золото
   }
   S.aData.needsUpdate = true;
