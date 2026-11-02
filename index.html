@@ -456,6 +456,7 @@ const CFG = {
     PILE_SETTLE_DIP: 0.07,//   …с провалом до стольких высоты, пыль у подножия и лёгкая тряска
     PILE_CUT_MIN: 0.95,   //   след кучи тоже сжимается: нижние карты вне ямы дальше (от 2,3 до стольких радиусов кучи) не рисуются…
     PILE_CUT_H: 0.22,     //   …если лежат ниже такой доли высоты стога (тонкий подол; бока холма остаются)
+    ENV_POP_MS: 1300,     //   окружение кучи вырастает с пружинкой (каждый предмет со своей задержкой) или прячется в землю за столько
     PILE_GROW: 1.55,      //   следующая куча — тот же стог, показанный во столько раз крупнее (фейк «куча больше»)
     SHRINK_DOWN_MS: 1100, //   …затем нырок к следующему тузу (кривые нырка)
     TROPHY_FADE_AT: 1300, //   бесконечный: трофей с этого момента (от взятия) за TROPHY_FADE_MS уменьшается до 0,6 и гаснет
@@ -692,6 +693,22 @@ function levelPit(li){
 // ================= партия =================
 // Ранги ямы, стартовая и колода — из одной перетасованной колоды 52 (не влезает — из двух-трёх). Туз ямы — туз.
 function freshDeck(R){ const d = []; for (let i = 0; i < 52; i++) d.push(i); return shuffle(d, R); }
+// колода без повторов ранга подряд (Андрей 01.11: «повторные карты в колоде подряд очень раздражают»): карта того же ранга, что
+// предыдущая (prev — ранг перед arr[from]: текущая или прошлая карта колоды), меняется местами с ближайшей дальше другого ранга
+function spreadStock(arr, prev, from){
+  for (let i = from || 0; i < arr.length; i++){
+    const before = i > (from || 0) ? rk(arr[i - 1]) : prev; if (rk(arr[i]) !== before) continue;
+    let k = i + 1; while (k < arr.length && rk(arr[k]) === before) k++;
+    if (k < arr.length){ const t = arr[i]; arr[i] = arr[k]; arr[k] = t; continue; }
+    // дальше менять не с чем (хвост колоды) — с картой раньше, если на её месте эта не встанет в пару и та не встанет в пару здесь
+    const at = (j) => j < (from || 0) ? prev : j >= arr.length ? -1 : rk(arr[j]), r = rk(arr[i]);
+    for (let j = from || 0; j < i - 1; j++){ const q = rk(arr[j]);
+      if (r !== at(j - 1) && r !== at(j + 1) && q !== at(i - 1) && q !== at(i + 1)){ const t = arr[j]; arr[j] = arr[i]; arr[i] = t; break; } }
+  }
+  return arr;
+}
+const hasRepeat = (h, prev) => h.some((v, i) => rk(v) === (i ? rk(h[i - 1]) : prev));
+const stockTail = (st) => st.stock.length ? rk(st.stock[st.stock.length - 1]) : rk(st.top);   // ранг перед новыми картами в конце колоды
 function deal(L, D, R){
   const need = L.n + 1 + D, k = Math.max(1, Math.ceil(need / 52));
   const vals = []; for (let d = 0; d < k; d++) for (let i = 0; i < 52; i++) vals.push(i);
@@ -702,6 +719,7 @@ function deal(L, D, R){
   const gi = L.goldIdx; st.pool[rk(st.tab[gi])]--; st.tab[gi] = 13; st.pool[0]++; st.known[0]++;   // золотой туз — туз червей
   st.known[rk(st.top)]++;
   for (let q = 0; q < L.n; q++) if (!st.cover[q] && q !== gi) st.known[rk(st.tab[q])]++;
+  spreadStock(st.stock, rk(st.top));
   return st;
 }
 // Урок: ранги — цепочкой сверху вниз до туза (текущая на 1 выше верхней карты), колоды нет. Ход один, решать нечего —
@@ -782,7 +800,7 @@ function ensureStartMove(L, st){
   }
   return st;
 }
-const startDeal = (L, st) => CFG.START_MOVE ? ensureStartMove(L, ensureStartChain(L, st, CFG.START_CHAIN)) : st;
+const startDeal = (L, st) => spreadStock((CFG.START_MOVE ? ensureStartMove(L, ensureStartChain(L, st, CFG.START_CHAIN)) : st).stock, rk(st.top)) && st;
 function newDeal(li, attempt){
   const L = levelPit(li);
   if (LEVELS[li].kind === 'tiny') return chainDeal(L);
@@ -798,7 +816,7 @@ function fitsOpen(L, st, v){ for (let q = 0; q < L.n; q++) if (st.present[q] && 
 function rigDraw(L, st){
   if (st.stock.length < 2 || fitsOpen(L, st, st.stock[0]) || st.rig.R() >= assistP(L, st, 'DRAW')) return false;
   const j = st.stock.findIndex((v, i) => i > 0 && fitsOpen(L, st, v)); if (j < 0) return false;
-  const t = st.stock[0]; st.stock[0] = st.stock[j]; st.stock[j] = t; st.rig.draws++; return true;
+  const t = st.stock[0]; st.stock[0] = st.stock[j]; st.stock[j] = t; spreadStock(st.stock, rk(st.stock[0]), 1); st.rig.draws++; return true;
 }
 // после снятия: хода не осталось, а открылись карты — первая открывшаяся получает ранг, продолжающий серию (обмен
 // с картой из глубины колоды или с закрытой картой ямы; туз ямы не трогается)
@@ -933,7 +951,7 @@ function loop(L, st, cfg, R, m){
 }
 function topUpRest(st, R, n){ while (st.rest.length < n){ const d = freshDeck(R); for (const v of d) st.pool[v % 13]++; st.rest.push(...d); } }
 // честная «+5»: 5 следующих карт остатка колоды
-function plusFiveHonest(st, R){ topUpRest(st, R, CFG.PLUS5_N); st.stock.push(...st.rest.splice(0, CFG.PLUS5_N)); }
+function plusFiveHonest(st, R){ topUpRest(st, R, CFG.PLUS5_N); const n0 = st.stock.length, prev = stockTail(st); st.stock.push(...st.rest.splice(0, CFG.PLUS5_N)); spreadStock(st.stock, prev, n0); }
 // «+5 под игрока» (как чашка кофе в «Свете в окнах»): первая подходящая к открытым — 2-я или 3-я, и жадный, знающий
 // закрытые, с ней доигрывает. Возвращает новое состояние.
 function plusFiveRigged(L, st, R){
@@ -945,6 +963,7 @@ function plusFiveRigged(L, st, R){
     const h = s.rest.slice(0, CFG.PLUS5_N);
     const first = h.findIndex(fits);
     if (first !== 1 && first !== 2) continue;
+    if (hasRepeat(h, stockTail(s))) continue;   // и без повтора ранга подряд
     s.rest = s.rest.slice(CFG.PLUS5_N); s.stock.push(...h);
     if (!fallback) fallback = s;
     const probe = cloneSt(s); if (loop(L, probe, { bot: 'greedy' }, mulberry32(t * 977 + 3), null)) return s;
@@ -1022,10 +1041,10 @@ function endlessDeal(L, prev, R, pitNo){   // pitNo — какая это яма
   return startDeal(L, st);
 }
 // награда за туз: +GOLD_CARDS карт в колоду (из свежей колоды)
-function endlessReward(st, R){ const d = freshDeck(R); for (let i = 0; i < CFG.ENDLESS.GOLD_CARDS; i++) st.stock.push(d[i % 52]); }
+function endlessReward(st, R){ const d = freshDeck(R), n0 = st.stock.length, prev = stockTail(st); for (let i = 0; i < CFG.ENDLESS.GOLD_CARDS; i++) st.stock.push(d[i % 52]); spreadStock(st.stock, prev, n0); }
 // после ямы: снятые карты убираются из живого стога забега
 function endlessCommit(run, L, st){ let n = 0; for (let q = 0; q < L.n; q++) if (!st.present[q]){ run.alive[L.nodes[q]] = 0; n++; } run.removed += n; run.pits++;
-  if (run.shown) run.fake = Math.min(run.shown, run.fake + endlessFake(run, L, n)); return n; }   // и со счёта кучи — фейковая доля
+  if (run.shown) run.fake = Math.min(L.joker ? run.shown : Math.round(run.shown * 0.97), run.fake + endlessFake(run, L, n)); return n; }   // и со счёта кучи — фейковая доля; до джокера в куче всегда остаётся ≥ 3%
 // забег бота (сим): ямы подряд до тупика; на почти-победе — «+5 под игрока», пока есть p5. k — куча; untilJoker — куча
 // целиком до джокера: колода кончилась — куча ждёт, новая колода (как автосейв кучи у игрока); acts — ходы и доборы бота
 function endlessBotRun(seed, bot, p5, k, untilJoker){
@@ -1187,6 +1206,7 @@ const G = {
   missTips: 0,             // подсказок «эта карта не в яме» за сессию
   srchNearAt: 0, pinchUsed: false,   // поиск: первое приближение (для подсказки про щипок) и был ли щипок
   shrink: null, pitFrom: 0,          // бесконечный: взгляд на стог между ямами { from, to, t0, descAt, down }; карт в стоге на старте ямы
+  envPop: null,           // окружение: { t0, dir } — вырастает (1) / прячется (−1), null — стоит
   pileH: 1,               // высота стога ×K (куча оседает со счётом, pileHTarget; в placeCamera — к ys и точке взгляда)
   pileIntro: null, pileMove: null, jokerWinAt: -1e9,   // кучи: табличка новой кучи { t0, k, N, left }; переезд к следующей { P, off, mesh, run, L }; взят джокер
 };
@@ -1783,19 +1803,42 @@ const GROUND_FS = `
   uniform sampler2D uTex; uniform float uRad, uBackdrop; uniform vec2 uShC, uShD, uRes, uVC;   // uShD — направление тени (вправо-вниз по экрану)
   varying vec3 vW;
   void main(){
-    float r = length(vW.xz) / (uRad * 7.0);
-    vec3 c = mix(vec3(0.365, 0.353, 0.180), vec3(0.184, 0.196, 0.094), smoothstep(0.0, 0.55, r)); c = mix(c, vec3(0.106, 0.125, 0.059), smoothstep(0.55, 1.0, r));
+    float r = length(vW.xz) / (uRad * 7.0), rr = r * 7.0;   // rr — в радиусах кучи
+    // луг (Андрей 01.11: «вокруг кучи веселее, а не абстракция в пустоте»): под кучей и вокруг — стерня цвета соломы, дальше трава
+    // с полосами покоса и цветами, к горизонту — темнее (дымка)
+    vec2 sw = vec2(0.82, 0.57); float stripe = 0.5 + 0.5 * sin(dot(vW.xz, sw) * 0.42);
+    vec3 meadow = mix(vec3(0.30, 0.44, 0.16), vec3(0.36, 0.50, 0.19), stripe);
+    vec3 c = mix(vec3(0.50, 0.43, 0.22), meadow, smoothstep(1.5, 2.3, rr)); c = mix(c, vec3(0.17, 0.25, 0.10), smoothstep(4.5, 8.5, rr));
     // стерня: вблизи мелкая (0,09), издалека втрое крупнее — мелкая там уходит в мип и сливается в серое; к краю гаснет
     vec2 su = vW.xz * 0.09; float tpp = max(length(dFdx(su)), length(dFdy(su))) * 512.0;   // текселей мелкой на пиксель
     float st = mix(texture2D(uTex, su).r, texture2D(uTex, su * 0.15).r, smoothstep(1.5, 4.0, tpp));
     c *= mix(mix(0.84, 1.12, st), 1.0, smoothstep(0.7, 1.0, r));
+    // цветы на лугу: точка в клетке 1,1 × 1,1 (каждая ~25-я), гаснут, когда клетка мельче пары пикселей
+    vec2 fc = floor(vW.xz / 1.1), fr = fract(vW.xz / 1.1) - 0.5; float fh = fract(sin(dot(fc, vec2(127.1, 311.7))) * 43758.5453);
+    float fpx = max(length(dFdx(vW.xz)), length(dFdy(vW.xz))) / 1.1;
+    if (fh > 0.96 && rr > 1.9){ float fd = length(fr - (vec2(fract(fh * 13.1), fract(fh * 71.7)) - 0.5) * 0.5), fa = (1.0 - smoothstep(0.09, 0.09 + fpx, fd)) * (1.0 - smoothstep(0.15, 0.4, fpx));
+      vec3 fcol = fh > 0.987 ? vec3(1.0, 0.95, 0.85) : fh > 0.974 ? vec3(1.0, 0.55, 0.62) : vec3(1.0, 0.82, 0.25); c = mix(c, fcol, fa * (1.0 - smoothstep(5.0, 7.0, rr))); }
     // тень стога: эллипс, длинная ось — вдоль uShD (вправо-вниз по экрану при любом рыскании)
     vec2 sq = vW.xz - uShC, sp = vec2(dot(sq, uShD), dot(sq, vec2(-uShD.y, uShD.x))) / (uRad * vec2(3.1, 2.2)); c *= 1.0 - 0.6 * exp(-dot(sp, sp) * 2.2);
     c = mix(c, c * 0.6, uBackdrop);
-    vec2 vd = (gl_FragCoord.xy / uRes - uVC) * vec2(uRes.x / uRes.y, 1.0); c *= 1.0 - 0.28 * smoothstep(0.35, 0.85, length(vd));
+    vec2 vd = (gl_FragCoord.xy / uRes - uVC) * vec2(uRes.x / uRes.y, 1.0); c *= 1.0 - 0.2 * smoothstep(0.35, 0.85, length(vd));
     c += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
     gl_FragColor = vec4(c, 1.0);
   }`;
+// окружение кучи — деревья, кусты, рулоны сена, стожки (InstancedMesh, мультяшный свет от uLight). Ветер качает верх; uPop —
+// «вырастают» с пружинкой (каждый со своей задержкой aPop) или прячутся в землю (переезд к следующей куче)
+const ENV_VS = `
+  attribute vec3 aCol; attribute float aSway, aPop; uniform float uTime, uPop; uniform vec3 uLight; varying vec3 vC; varying float vL;
+  void main(){
+    float s = clamp((uPop - aPop) / 0.4, 0.0, 1.0), k = s - 1.0, pop = s >= 1.0 ? 1.0 : 1.0 + 2.70158 * k * k * k + 1.70158 * k * k;   // easeOutBack
+    vec3 p = position * max(pop, 0.0); vec3 o = instanceMatrix[3].xyz;
+    p.x += aSway * max(0.0, position.y) * 0.035 * sin(uTime * 1.4 + o.x * 0.21 + o.z * 0.17);
+    vec3 n = normalize(mat3(instanceMatrix) * normal); vL = 0.58 + 0.42 * max(0.0, dot(n, normalize(uLight))) + 0.12 * n.y;
+    vC = aCol * color; gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(p, 1.0);
+  }`;
+const ENV_FS = `
+  uniform float uBackdrop; uniform vec2 uRes, uVC; varying vec3 vC; varying float vL;
+  void main(){ vec3 c = vC * vL; c = mix(c, c * 0.6, uBackdrop); vec2 vd = (gl_FragCoord.xy / uRes - uVC) * vec2(uRes.x / uRes.y, 1.0); c *= 1.0 - 0.2 * smoothstep(0.35, 0.85, length(vd)); gl_FragColor = vec4(c, 1.0); }`;
 // Контактная тень (InstancedMesh) и ореол туза (Mesh): общий вершинный шейдер, instanceMatrix есть только у теней
 const SH_VS = `
   varying vec2 vUv;
@@ -1871,6 +1914,9 @@ function initScene(){
   S.haloMat = new THREE.ShaderMaterial({ vertexShader: SH_VS, fragmentShader: HALO_FS, transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, uniforms: { uGlow: { value: 0 } } });
   S.halo = new THREE.Mesh(new THREE.PlaneGeometry(CFG.CARD_W * 2.4, 2.4).rotateX(-Math.PI / 2), S.haloMat);
   S.halo.renderOrder = 12; S.halo.matrixAutoUpdate = false; S.halo.frustumCulled = false; S.halo.visible = false; S.scene.add(S.halo);
+  S.envMat = new THREE.ShaderMaterial({ vertexShader: ENV_VS, fragmentShader: ENV_FS, vertexColors: true, uniforms: { uTime: S.mat.uniforms.uTime, uPop: { value: 2 }, uLight: S.mat.uniforms.uLight,
+    uBackdrop: S.mat.uniforms.uBackdrop, uRes: S.mat.uniforms.uRes, uVC: S.mat.uniforms.uVC } });
+  S.env = []; buildEnv();
   setScenePile(pile());
   S.ok = true;
 }
@@ -1891,6 +1937,38 @@ function cardGeo(){
 // лица карт вне ямы по сиду (у куч бесконечного — свои: вид у всех один стог теста)
 const FACE_SEED = CFG.PILE_SEED * 31 + 3, pileFaceSeed = (k) => FACE_SEED + 1000 * k;
 function setFaces(seed){ const N = S.P.N, R = mulberry32(seed); S.face = new Int16Array(N); for (let i = 0; i < N; i++) S.face[i] = Math.floor(R() * 52); S.faceSeed = seed; }
+// окружение по кругу вокруг кучи (размеры — в радиусах кучи теста, она у всех куч одна): деревья 2,4–4,8 R, кусты, рулоны сена и
+// стожки 1,9–3,2 R — за подолом кучи; сид один — луг тот же, «вырастает» заново к каждой куче
+function envGeo(geo, col){ const n = geo.attributes.position.count, c = new Float32Array(n * 3); for (let i = 0; i < n; i++){ c[i * 3] = col[0]; c[i * 3 + 1] = col[1]; c[i * 3 + 2] = col[2]; } geo.setAttribute('color', new THREE.BufferAttribute(c, 3)); return geo; }
+function envMerge(parts){ const g = new THREE.BufferGeometry(), at = { position: [], normal: [], color: [] }, idx = []; let off = 0;
+  for (const p of parts){ const q = p.index ? p.toNonIndexed() : p; for (const k in at) at[k].push(...q.attributes[k].array); off += q.attributes.position.count; }
+  for (const k in at) g.setAttribute(k, new THREE.Float32BufferAttribute(at[k], 3)); return g; }
+function buildEnv(){
+  const R = mulberry32(4242), rad = pile().rad, m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), sc = new THREE.Vector3();
+  const tree = envMerge([envGeo(new THREE.CylinderGeometry(0.28, 0.38, 2.2, 6).translate(0, 1.1, 0), [0.45, 0.30, 0.18]),
+    envGeo(new THREE.ConeGeometry(2.3, 3.6, 7).translate(0, 3.6, 0), [1, 1, 1]), envGeo(new THREE.ConeGeometry(1.7, 3.0, 7).translate(0, 5.4, 0), [1, 1, 1])]);
+  const bush = envMerge([envGeo(new THREE.IcosahedronGeometry(1.2, 0).translate(0, 0.7, 0), [1, 1, 1]), envGeo(new THREE.IcosahedronGeometry(0.85, 0).translate(0.9, 0.5, 0.3), [1, 1, 1])]);
+  const bale = envMerge([envGeo(new THREE.CylinderGeometry(0.95, 0.95, 1.5, 12).rotateZ(Math.PI / 2).translate(0, 0.95, 0), [1, 1, 1]),
+    envGeo(new THREE.CylinderGeometry(0.62, 0.62, 1.52, 12).rotateZ(Math.PI / 2).translate(0, 0.95, 0), [0.8, 0.72, 0.5])]);
+  const stack = envMerge([envGeo(new THREE.ConeGeometry(1.7, 2.9, 9).translate(0, 1.45, 0), [1, 1, 1]), envGeo(new THREE.CylinderGeometry(0.08, 0.08, 1.2, 4).translate(0, 3.2, 0), [0.45, 0.3, 0.18])]);
+  const kinds = [   // геометрия, сколько, кольцо (радиусы кучи), размер, цвета, качание
+    [tree, 30, 2.4, 4.8, [0.85, 1.35], [[0.36, 0.58, 0.24], [0.30, 0.52, 0.22], [0.46, 0.62, 0.22], [0.62, 0.66, 0.24]], 1],
+    [bush, 26, 1.95, 3.6, [0.7, 1.3], [[0.38, 0.60, 0.26], [0.47, 0.66, 0.28], [0.32, 0.54, 0.24]], 0.6],
+    [bale, 12, 1.95, 3.0, [0.9, 1.15], [[0.86, 0.72, 0.38], [0.92, 0.78, 0.42]], 0],
+    [stack, 7, 2.1, 3.2, [0.8, 1.2], [[0.90, 0.76, 0.40], [0.84, 0.70, 0.34]], 0.3]];
+  for (const [geo, n, r0, r1, [s0, s1], cols, sway] of kinds){
+    const mesh = new THREE.InstancedMesh(geo, S.envMat, n), aCol = new Float32Array(n * 3), aSway = new Float32Array(n), aPop = new Float32Array(n);
+    for (let i = 0; i < n; i++){
+      const a = (i + 0.6 * R()) / n * Math.PI * 2 + kinds.indexOf(kinds.find(k => k[0] === geo)) * 0.7, r = rad * (r0 + (r1 - r0) * R()), s = s0 + (s1 - s0) * R();
+      v.set(Math.sin(a) * r, -0.05, Math.cos(a) * r); e.set(0, R() * Math.PI * 2, 0); q.setFromEuler(e); sc.set(s, s, s); m.compose(v, q, sc); mesh.setMatrixAt(i, m);
+      const c = cols[Math.floor(R() * cols.length)], j = 0.92 + 0.16 * R(); aCol.set([c[0] * j, c[1] * j, c[2] * j], i * 3); aSway[i] = sway * (0.6 + 0.8 * R()); aPop[i] = (r / rad - 1.9) / 3.2 * 0.6 + 0.08 * R();
+    }
+    mesh.geometry = geo.clone(); mesh.geometry.setAttribute('aCol', new THREE.InstancedBufferAttribute(aCol, 3)); mesh.geometry.setAttribute('aSway', new THREE.InstancedBufferAttribute(aSway, 1));
+    mesh.geometry.setAttribute('aPop', new THREE.InstancedBufferAttribute(aPop, 1)); mesh.instanceMatrix.needsUpdate = true; mesh.frustumCulled = false; S.scene.add(mesh); S.env.push(mesh);
+  }
+}
+// окружение вырастает (dir 1) или прячется в землю (−1) за ENV_POP_MS
+function envPop(dir){ G.envPop = { t0: now(), dir }; addFx({ kind: 'env.pop', dur: CFG.FX.ENV_POP_MS, info: dir > 0 ? 'up' : 'down' }); }
 function setScenePile(P){
   if (S.P === P && S.mesh) return;
   if (S.mesh){ S.scene.remove(S.mesh); S.mesh.geometry.dispose(); S.mesh.dispose(); }
@@ -2365,7 +2443,7 @@ function endlessSave(deckOut){
   const r = G.run; if (G.mode !== 'endless' || !r || !r.P) return;
   const rem = []; for (let i = 0; i < r.P.N; i++) if (!r.alive[i]) rem.push(i);
   let fake = r.fake, n = 0;
-  if (G.L && G.st && G.st.present && !G.L.committed){ for (let q = 0; q < G.L.n; q++) if (!G.st.present[q] && r.alive[G.L.nodes[q]]){ rem.push(G.L.nodes[q]); n++; } if (n) fake = Math.min(r.shown, fake + endlessFake(r, G.L, n)); }
+  if (G.L && G.st && G.st.present && !G.L.committed){ for (let q = 0; q < G.L.n; q++) if (!G.st.present[q] && r.alive[G.L.nodes[q]]){ rem.push(G.L.nodes[q]); n++; } if (n) fake = Math.min(G.L.joker ? r.shown : Math.round(r.shown * 0.97), fake + endlessFake(r, G.L, n)); }
   const st = G.st, keep = !deckOut && st && st.stock && st.stock.length;
   G.save.endless.pile = { k: r.k, removed: rem, fake, stock: keep ? st.stock.slice() : null, top: keep ? st.top : -1, streak: keep ? st.streak || 0 : 0 };
   save();
@@ -2522,7 +2600,7 @@ function jokerFx(t){
 function endlessNextPile(){
   const r = G.run, E = G.save.endless, FX = CFG.FX, k = r.k + 1, st = G.st && G.st.stock ? G.st : null;
   E.piles = Math.max(E.piles || 0, k); E.pile = { k, removed: [], stock: st ? st.stock.slice() : null, top: st ? st.top : -1, streak: st ? st.streak || 0 : 0 }; save();
-  G.phase = 'pile'; G.pitOn = false; refreshData(); tip(''); G.shrink = null;   // G.L — прошлая яма: панель остаётся до первой ямы новой кучи
+  G.phase = 'pile'; G.pitOn = false; refreshData(); tip(''); G.shrink = null; envPop(-1);   // G.L — прошлая яма: панель остаётся до первой ямы новой кучи; луг прячется
   const P1 = SP(), P2 = endlessPile(k), run2 = endlessStart(E.runs, k), G2 = FX.PILE_GROW; run2.coins = r.coins; run2.aces = r.aces; run2.fake0 = 0;
   const L2 = endlessNextPit(run2);
   placeCamera(now());
@@ -2546,7 +2624,7 @@ function endlessPileSwap(){
   const g = M.grow, sc = (o) => { if (!o) return; o.tx = (o.tx - M.off.x) / g; o.tz = (o.tz - M.off.z) / g; o.ty /= g; o.dist /= g; };
   sc(CAM); sc(home);
   G.run = M.run; G.aliveNow = G.run.alive; G.covDirty = true; G.pileMove = null; G.pileH = 1; clearAnims();   // новая куча — во весь рост
-  nextEndlessPit(true, M.L);
+  envPop(1); nextEndlessPit(true, M.L);   // вокруг новой кучи луг вырастает
 }
 function dropPreview(){ const M = G.pileMove; if (M && M.mesh){ S.scene.remove(M.mesh); M.mesh.geometry.dispose(); M.mesh.material.dispose(); M.mesh = null; } }
 // следующая куча рядом с текущей: укладка — сразу в кэш (после переезда setScenePile берёт её же), свой меш со сдвигом;
@@ -2767,8 +2845,9 @@ function goalBump(at, a){ G.goalBumps.push({ at, a: a === undefined ? 0.2 : a })
 const uicv = $('ui'), uctx = uicv.getContext('2d');
 const CUR_W = 68, CUR_H = 95, GH_W = 42, GH_H = 59;
 function curGeo(){ const t = trayTop() + (1 - G.trayK) * (TRAY_H + 40); return { x: VW / 2, y: t + 136, w: CUR_W, h: CUR_H, top: t }; }
-function deckGeo(){ const c = curGeo(); return { x: 64, y: c.y, w: 60, h: 84 }; }
-function goalGeo(){ const c = curGeo(); return { x: VW - 64, y: c.y - 6, w: 44, h: 62 }; }
+// колода — справа, цель — слева (Андрей 01.11: «колоду и цель поменять местами»)
+function deckGeo(){ const c = curGeo(); return { x: VW - 64, y: c.y, w: 60, h: 84 }; }
+function goalGeo(){ const c = curGeo(); return { x: 64, y: c.y - 6, w: 44, h: 62 }; }
 function pillPos(){ const fr = $('frame').getBoundingClientRect(), r = document.querySelector('.pill').getBoundingClientRect(); return { x: (r.left - fr.left + 16) / scale, y: (r.top - fr.top + 16) / scale }; }
 // ---------- спрайты 2D. Свечения — спрайтами 'lighter' (размытие тени не масштабируется трансформом: на DPR 2 оно вдвое уже,
 // чем на DPR 1, а спрайт масштабируется вместе со всем). GLOW и SHADOW рисуются раз (boot), TRAY_BG и COIN_SPR зависят от
@@ -3971,6 +4050,7 @@ function tick(t, fromRaf){
   updateCamera(t);
   const u = S.mesh.material.uniforms, dimTo = G.pitOn && !(G.phase === 'dive' && G.diveK < CFG.FX.DIVE_DIM) ? 1 : 0;   // затемнение — с DIVE_DIM нырка
   u.uDim.value += (dimTo - u.uDim.value) * fk(0.08); u.uTime.value = (t - T0) / 1000;
+  if (S.envMat){ const ep = G.envPop, k = ep ? Math.max(0, Math.min(1, (t - ep.t0) / CFG.FX.ENV_POP_MS)) : 1; S.envMat.uniforms.uPop.value = !ep || ep.dir > 0 ? k * 1.1 : (1 - k) * 1.1; }   // 1,1 — все с задержками успели
   // свет холма: в полную силу на общем плане и в меню, вблизи приглушён (ранг читается), в поиске — по зуму; в кампании — по
   // масштабу, как резкость: нырок и отъезд меняют его вместе с камерой, а не в первый кадр твина
   const FX = CFG.FX, clamp01 = (v) => Math.max(0, Math.min(1, v));
@@ -4156,6 +4236,7 @@ async function boot(){
   makeSprites(); fit(); initScene(); fit();
   try { S.atlasBmp = await createImageBitmap(S.atlas); } catch (e) { S.atlasBmp = null; }   // без createImageBitmap 2D рисует прямо с S.atlas
   G.aliveNow = aliveFromSave(); refreshData(); G.coinsShown = G.save.coins; G.pileH = pileHTarget();   // за меню — куча из сейва уже осевшей
+  envPop(1);   // луг вокруг кучи вырастает при запуске
   // прогрев до первого нырка: все меши в сцене и видимы — земля, контактная тень (count 1), ореол; шейдеры собираются заранее
   // (compileAsync — без блокировки, подпись загрузки не замирает). Кадры: общий план, яма (затемнение, тень и ореол включены —
   // все ветки шейдеров), общий план. 2D — атлас, спрайты и шрифт по пикселю
