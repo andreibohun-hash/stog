@@ -290,10 +290,13 @@ const CFG = {
                           //   лица решаются при перевороте; пока серия короче скрытой цели — одна из открывшихся карт ±1 к взятой,
                           //   серия дошла до цели — открывающиеся карты не ±1 (срыв за 1–3 карты на видимых); добор — новая цель
       GOAL: [12, 24],     //     цель цепочки — случайно в этих границах (сид стога); калибровка `node sim.mjs whole`: медиана серии 12–16
-      POOL: [2, 3],       //     пока серия короче цели: остальные открывшиеся — «тёплый пул», ранг текущей ± столько (через шаг станут ±1)
-      SOFT_TAPS: 3,       //     срыв мягкий (плейтест v37: «потом стена»): после цели шанс ±1 в пачке падает 1 → SOFT_MIN за столько снятий…
-      SOFT_MIN: 0.3,      //     …и держится; остальные лица — случайные не ранга текущей (не «нарочно мимо»): цепочка кончается сама
-      TWO_WAYS: 2,        //     в пачке от стольких карт ±1 даётся двум в разные стороны (+1 и −1): два варианта хода почти всегда
+      POOL_W: [0.4, 0.35, 0.25],   // подыгрыш не в лоб (v38): пока серия короче цели, каждое новое лицо — из «тёплого пула» вокруг текущей:
+                          //     ранг текущей ± 1 / ± 2 / ± 3 с такими весами, знак случайный (к кусочку золотой или дальнему лицу — с весом
+                          //     POOL_DIR_P); в волне из 4 подходящих обычно 1–2 — похоже на везение, а не на подачу (без ±1 вовсе — 13%)
+      POOL_DIR_P: 1,      //     вероятность знака пула в сторону волны (лесенка ±1, ±2, ±3 в одну сторону — играются друг за другом; 0,8 давало медиану 8–9, 1 — 9–11)
+      NOFIT_P1: 1,        //     если сейчас ни одно лицо не подходит к текущей (цепочка оборвётся), первое новое лицо — ±1 с такой вероятностью
+      SOFT_TAPS: 3,       //     срыв мягкий (плейтест v37: «потом стена»): после цели шанс тёплого пула падает 1 → SOFT_MIN за столько снятий…
+      SOFT_MIN: 0.3,      //     …и держится; иначе лица — честный случай не ранга текущей (не «нарочно мимо»): цепочка кончается сама
     },
     JOKER_BANDS: { 3: [[0.04, 0.3], [0.36, 0.62], [0.68, 0.92]], 2: [[0.05, 0.42], [0.55, 0.92]] },   // половинки джокера k (CFG.JOKERS[k])
                           //   появляются в этой полосе прогресса (доля снятого стога; wholeSchedule) — набор по числу джокеров на стог:
@@ -304,13 +307,17 @@ const CFG = {
     // в VIEW_R от фронта, иначе ждут рубашкой. Показанное лицо из ямы не выходит никогда. Площадь ямы держит лимит лиц, а чтобы
     // далёкие лица не висели, генератор каждые FAR_EVERY снятий (или при FAR_N лицах дальше VIEW_R) ведёт цепочку к самому дальнему
     // лицу. Физически открытая, но не перевёрнутая карта — тёмная рубашка, тап — «яма растёт от снятых карт»
-    OPEN_TARGET: 12,      //   лиц вверх — мягкий лимит: пачка у снятой может превысить его на OPEN_OVER; лиц стало меньше OPEN_LOW —
-    OPEN_OVER: 3,         //   добор пачкой до OPEN_TARGET вокруг снятой (не вокруг фронта). Среднее перевёрнутых на снятие ≡ 1 (лиц
-    OPEN_LOW: 8,          //   ограниченное число), поэтому перевороты идут пачками по 3–4 раз в несколько снятий, а не по одной каждый раз
-    FLIP_NEAR_R: 1.5,     //   переворот там, где тапнул (плейтест v37: «открываются далеко от точки тапа, по одной, ведут за ручку»):
-    FLIP_BATCH: 4,        //   открывшиеся из-под снятой и открытые рубашки не дальше FLIP_NEAR_R от снятой — пачкой до FLIP_BATCH, волной наружу
+    // Волны вместо капельницы (Андрей 03.11 v38: «открывать пачками по 3–4 в области разбора, не так явно подыгрывая»): лиц стало
+    // ≤ WAVE_LOW — волна: пачка WAVE_N открытых рубашек из области разбора (ближайшие к последней снятой, не дальше FLIP_R), волной от
+    // неё; пока лиц больше — новых лиц нет, кроме открывшихся из-под снятой в самой области (UNDER_R от снятой) — они переворачиваются
+    // сразу. Никакого добора «по одной до лимита». Размер волны случайный, чтобы ритм не читался
+    WAVE_LOW: 4,          //   волна приходит, когда лиц вверх не больше стольких (3 → 4: медиана серии 8 → 10, доборы 9,4 → 8,3%; подбор 03.11)
+    WAVE_N: [3, 5],       //   размер волны — случайно в этих границах…
+    WAVE_SMALL_P: 0.15,   //   …а с такой вероятностью — WAVE_SMALL (ритм сбивается)
+    WAVE_SMALL: 2,
+    UNDER_R: 2.0,         //   открывшиеся из-под снятой переворачиваются сразу, если не дальше стольких от неё (область разбора)
     VIEW_R: 3.5,          //   радиус ямы для закрытых (тон по слою) от фронта, высот карты
-    FLIP_R: 9,            //   дальше этого от снятой лицо не решается (лиц нет совсем — фронт переезжает к ближайшей открытой)
+    FLIP_R: 9,            //   дальше этого от снятой волна не берёт (лиц нет совсем — фронт переезжает к ближайшей открытой)
     FRONT_K: 0.2,         //   доля шага фронта к снятой карте (EMA по ~5 картам)
     FAR_EVERY: 4,         //   каждые столько снятий цепочка ведётся к самому дальнему лицу… (подбор: 6/3 — разброс 5,4 на 3 000, 4/2 — 5,1)
     FAR_N: 2,             //   …и всегда, когда лиц дальше VIEW_R от фронта не меньше стольких
@@ -1317,7 +1324,7 @@ function wholeStart(seed, coll, plain, Nsize){
     top: 0, streak: 0, best: 0, taps: 0, draws: 0, removed: 0, found: false, won: false, plain: !!plain, order: [],
     goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0 };
   if (!plain) wholeSchedule(S, R);
-  S.front = { x: 0, y: 0 }; const flip = zoneUpdate(S);   // старт: фронт на верхушке, переворачиваются OPEN_TARGET ближайших (по расстоянию)
+  S.front = { x: 0, y: 0 }; const flip = zoneUpdate(S, undefined, undefined, CFG.WHOLE.START_CHAIN + 2);   // старт: волна из START_CHAIN + 2 ближайших к верхушке
   // верхняя карта случайна; ближайшие к фронту — лесенка к ней (top ± 1, ± 2, ± 3: ход есть всегда, серия START_CHAIN; плейтест v34:
   // «старт без опции снять с поля»), остальные — случайные лица не ранга верхней
   S.top = Math.floor(R() * 52); const r0 = rk(S.top), dir = R() < 0.5 ? 1 : -1;
@@ -1338,30 +1345,24 @@ function wholeFaces(S, cards){
   if (!S.plain){ wholeAssign(S, list); list = list.filter(j => S.face[j] === FACE_NONE); if (!list.length) return all; }   // половинки и кусочки — по графику прогресса
   const suit = () => 13 * Math.floor(S.R() * 4);
   if (S.plain){ for (const j of list) S.face[j] = Math.floor(S.R() * 52); return all; }
-  // сторона помощи (+1 или −1): та, куда цепочке есть куда идти дальше — в яме больше открытых карт ранга текущей ± 2 (после шага они
-  // станут ±1); пул — в ту же сторону (лесенка 7 → 8 → 9 на открывшихся картах)
-  // Открытый в яме кусочек золотой карты — цепочка ведётся к его рангу (ближней стороной): кусочек не ждёт, пока ранг случайно совпадёт
-  // Далёкие лица (дальше VIEW_R от фронта) не должны висеть вечно: каждые FAR_EVERY снятий или при FAR_N далёких — цепочка ведётся
-  // к рангу самого дальнего лица (ближней стороной), чтобы оно снялось и площадь ямы стянулась
-  let up = 0, dn = 0, up1 = 0, dn1 = 0, pd = 7, pdir = 0, farN = 0, farI = -1, farD = 0; const W = CFG.WHOLE, fr = S.front;
+  // ведение (только знак пула): к открытому в яме кусочку золотой (ближней стороной) или, каждые FAR_EVERY снятий / при FAR_N далёких,
+  // к самому дальнему лицу (дальше VIEW_R от фронта), чтобы оно снялось и площадь ямы стянулась
+  let pd = 7, pdir = 0, farN = 0, farI = -1, farD = 0, up = 0, dn = 0, fits = 0; const W = CFG.WHOLE, fr = S.front;
   if (help) for (let i = 0; i < S.P.N; i++) if (S.zone[i] && S.alive[i] && !S.cover[i] && S.face[i] >= 0){
     const f = S.face[i]; if (wholeIsHalf(f)) continue; const d = (wholeRank(S, i) - r0 + 13) % 13, dist = Math.hypot(S.P.x[i] - fr.x, S.P.y[i] - fr.y);
     if (dist > W.VIEW_R){ farN++; if (dist > farD){ farD = dist; farI = i; } }
     if (wholeIsPiece(f)){ const dd = Math.min(d, 13 - d); if (dd > 1 && dd < pd){ pd = dd; pdir = d <= 6 ? 1 : -1; } }
-    else if (d === 1) up1++; else if (d === 12) dn1++; else if (d === 2) up++; else if (d === 11) dn++; }
+    else if (d === 2) up++; else if (d === 11) dn++;
+    if (wholeFits(S, i)) fits++; }                 // подходящих лиц сейчас
   let fdir = 0; if (help && farI >= 0 && (farN >= W.FAR_N || S.removed % W.FAR_EVERY === 0)){ const d = (wholeRank(S, farI) - r0 + 13) % 13; if (d > 1 && d < 12) fdir = d <= 6 ? 1 : -1; }
-  // два варианта хода: если в яме уже есть лицо +1, новое ±1 — в сторону −1 (и наоборот), чтобы подходили обе стороны
-  const cdir = up1 && !dn1 ? -1 : dn1 && !up1 ? 1 : 0;
-  const dir = pdir || fdir || cdir || (up === dn ? (S.R() < 0.5 ? 1 : -1) : up > dn ? 1 : -1);
-  const hi = help ? Math.floor(S.R() * list.length) : -1, h = hi >= 0 ? list[hi] : -1;
-  const h2 = help && list.length >= C.TWO_WAYS ? list[(hi + 1 + Math.floor(S.R() * (list.length - 1))) % list.length] : -1;   // второй ±1 — в другую сторону (пачка ≥ TWO_WAYS: пул не пустеет)
-  const step = (lim) => { const d = lim[0] + Math.floor(S.R() * (lim[1] - lim[0] + 1)); return (13 + dir * d) % 13; };
-  for (const j of list){
-    if (j === h) S.face[j] = (r0 + 13 + dir) % 13 + suit();
-    else if (j === h2) S.face[j] = (r0 + 13 - dir) % 13 + suit();
-    else if (soft){ let f; do f = Math.floor(S.R() * 52); while (rk(f) === r0); S.face[j] = f; }   // после цели — честный случай, не «нарочно мимо»
-    else S.face[j] = (r0 + step(C.POOL)) % 13 + suit();
-  }
+  // знак пула — один на волну (лесенка: ±1, ±2, ±3 в одну сторону играются друг за другом): ведение к кусочку / дальнему лицу,
+  // иначе — куда в яме больше лиц ранга текущей ± 2, иначе случайно
+  const lead = pdir || fdir || (up > dn ? 1 : dn > up ? -1 : (S.R() < 0.5 ? 1 : -1)), pw = C.POOL_W;
+  const pool = (first) => { const u = S.R() * (pw[0] + pw[1] + pw[2]), d = first && !fits && S.R() < C.NOFIT_P1 ? 1 : u < pw[0] ? 1 : u < pw[0] + pw[1] ? 2 : 3, sg = S.R() < C.POOL_DIR_P ? lead : -lead; return (r0 + 13 + sg * d) % 13; };
+  list.forEach((j, k) => {
+    if (help && !soft) S.face[j] = pool(k === 0) + suit();
+    else { let f; do f = Math.floor(S.R() * 52); while (rk(f) === r0); S.face[j] = f; }   // после цели — честный случай, не «нарочно мимо»
+  });
   return all;
 }
 // снять карту i «Одного стога»: открытая, в яме и ±1 к текущей (кусочек — по рангу своей золотой; половинка — любым тапом).
@@ -1381,8 +1382,10 @@ function wholeTap(S, i, how){
   S.alive[i] = 0; S.removed++; S.taps++; S.order.push(i);
   const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }
   frontStep(S, i);
-  res.faced = wholeFaces(S, zoneUpdate(S, P.x[i], P.y[i]));   // переворот там, где тапнул: пачка вокруг снятой, потом добор до лимита — тоже от снятой
-  res.opened = res.faced.slice();
+  const under = opened.filter(j => Math.hypot(P.x[j] - P.x[i], P.y[j] - P.y[i]) <= CFG.WHOLE.UNDER_R);   // из-под снятой, в области разбора — лицом сразу
+  res.faced = wholeFaces(S, under);
+  const wave = zoneUpdate(S, P.x[i], P.y[i]); res.wave = wave.length;   // лиц ≤ WAVE_LOW — волна пачкой от снятой
+  res.faced.push(...wholeFaces(S, wave)); res.opened = res.faced.slice();
   if (S.removed === P.N) S.won = true; res.done = S.won;
   return res;
 }
@@ -1440,20 +1443,20 @@ function zoneOpen(S){ let n = 0; for (let i = 0; i < S.P.N; i++) if (S.alive[i] 
 // фронт — к снятой карте i (EMA)
 function frontStep(S, i){ const P = S.P, k = CFG.WHOLE.FRONT_K; S.front.x += (P.x[i] - S.front.x) * k; S.front.y += (P.y[i] - S.front.y) * k; }
 // яма: открытая карта в яме ⇔ лицо решено (навсегда); закрытая — в яме, если не дальше VIEW_R от фронта (тон по слою, иначе тёмная
-// рубашка). → открытые без лица, которые надо перевернуть: пачка вокруг точки снятия (cx, cy; не дальше FLIP_NEAR_R, до FLIP_BATCH,
-// мягкий лимит OPEN_TARGET + OPEN_OVER), затем ближайшие к ней до OPEN_TARGET (не дальше FLIP_R); лиц нет и перевернуть нечего —
-// фронт переезжает к ближайшей открытой. Без (cx, cy) — от фронта (старт, восстановление)
-function zoneUpdate(S, cx, cy){
+// рубашка). → волна: если лиц ≤ WAVE_LOW — WAVE_N (или n) открытых рубашек, ближайших к точке снятия (cx, cy; не дальше FLIP_R);
+// иначе пусто. Без (cx, cy) — от фронта (старт, восстановление: волна только при нуле лиц); лиц нет и перевернуть нечего — фронт
+// переезжает к ближайшей открытой
+function zoneUpdate(S, cx, cy, n){
   const P = S.P, W = CFG.WHOLE, N = P.N; let faces = 0;
-  const pass = (x, y, batch) => { const f = S.front; faces = 0;
-    for (let i = 0; i < N; i++){ if (!S.alive[i]){ S.zone[i] = 0; continue; } S.zone[i] = S.cover[i] ? (Math.hypot(P.x[i] - f.x, P.y[i] - f.y) <= W.VIEW_R ? 1 : 0) : (S.face[i] >= 0 ? 1 : 0); if (!S.cover[i] && S.face[i] >= 0) faces++; }
-    const out = [], cand = nearby(P, x, y, W.FLIP_R).filter(i => S.alive[i] && !S.cover[i] && S.face[i] < 0).map(i => [i, Math.hypot(P.x[i] - x, P.y[i] - y)]).sort((a, b) => a[1] - b[1]);
-    if (batch) for (const [i, d] of cand){ if (d > W.FLIP_NEAR_R || out.length >= W.FLIP_BATCH || faces >= W.OPEN_TARGET + W.OPEN_OVER) break; out.push(i); faces++; }
-    if (faces < (batch ? W.OPEN_LOW : W.OPEN_TARGET)) for (const [i] of cand){ if (faces >= W.OPEN_TARGET) break; if (!out.includes(i)){ out.push(i); faces++; } } return out; };
-  const at = cx !== undefined;
-  let out = pass(at ? cx : S.front.x, at ? cy : S.front.y, at);
-  if (!faces){ let b = -1, bd = 1e9; for (let i = 0; i < N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); if (d < bd){ bd = d; b = i; } }
-    if (b >= 0 && bd > W.FLIP_R){ S.front = { x: P.x[b], y: P.y[b] }; out = pass(S.front.x, S.front.y, false); } }
+  const count = () => { const f = S.front; faces = 0;
+    for (let i = 0; i < N; i++){ if (!S.alive[i]){ S.zone[i] = 0; continue; } S.zone[i] = S.cover[i] ? (Math.hypot(P.x[i] - f.x, P.y[i] - f.y) <= W.VIEW_R ? 1 : 0) : (S.face[i] >= 0 ? 1 : 0); if (!S.cover[i] && S.face[i] >= 0) faces++; } };
+  const wave = (x, y) => { const size = n || (S.R() < W.WAVE_SMALL_P ? W.WAVE_SMALL : W.WAVE_N[0] + Math.floor(S.R() * (W.WAVE_N[1] - W.WAVE_N[0] + 1)));
+    const cand = nearby(P, x, y, W.FLIP_R).filter(i => S.alive[i] && !S.cover[i] && S.face[i] < 0).map(i => [i, Math.hypot(P.x[i] - x, P.y[i] - y)]).sort((a, b) => a[1] - b[1]);
+    return cand.slice(0, size).map(c => c[0]); };
+  count(); const at = cx !== undefined;
+  let out = at ? (faces <= W.WAVE_LOW ? wave(cx, cy) : []) : (faces ? [] : wave(S.front.x, S.front.y));
+  if (!faces && !out.length){ let b = -1, bd = 1e9; for (let i = 0; i < N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); if (d < bd){ bd = d; b = i; } }
+    if (b >= 0){ S.front = { x: P.x[b], y: P.y[b] }; count(); out = wave(S.front.x, S.front.y); } }
   return out;
 }
 // бот «Одного стога» (сим): играет в окне радиуса view (высот карты) у последней снятой, как человек в кадре; половинку в кадре
@@ -1461,7 +1464,7 @@ function zoneUpdate(S, cx, cy){
 // → { taps, draws, moves, jumps, won, open, chains (длины серий), jokAt / goldAt (доля стога, когда собраны), goldDraws, S }
 function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
   const S = wholeStart(seed, coll, plain, Nsize), P = S.P, open = new Set(); let fx = 0, fy = 0, jumps = 0, sumOpen = 0, nOpen = 0, goldDraws = 0;
-  const chains = [], jokAt = [], goldAt = [], spread = [], flipD = [], flipN = [];   // spread — «площадь ямы»: средний разброс открытых в яме от центра (EMA последних снятых), на каждый ход;
+  const chains = [], jokAt = [], goldAt = [], spread = [], flipD = [], flipN = [], waves = [], facesBefore = [], facesAfter = [];   // spread — «площадь ямы»: средний разброс открытых в яме от центра (EMA последних снятых), на каждый ход;
   let cx = 0, cy = 0, moves2 = 0, movesAll = 0;   // flipD — расстояние от снятой до каждого перевёрнутого лица; flipN — перевёрнутых за снятие; moves2 — ходов с ≥ 2 вариантами в кадре
   for (let i = 0; i < P.N; i++) if (!S.cover[i] && S.zone[i]) open.add(i);
   while (!S.won && S.taps < (maxTaps || 60000)){
@@ -1474,15 +1477,18 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
       if (b >= 0){ fx = P.x[b]; fy = P.y[b]; jumps++; pl = [b]; } else { chains.push(S.streak); if (wholeDraw(S, near)) goldDraws++; continue; } }
     let pick = pl.find(i => wholeIsHalf(S.face[i])), bd = 1e9; if (pick === undefined) pick = pl.find(i => wholeIsPiece(S.face[i]));   // половинка и кусочек — первыми (как человек: они заметные)
     if (pick === undefined) for (const i of pl){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; pick = i; } }
+    const facesPre = open.size - 1;             // лиц перед ходом без снятой (волна сработала при facesPre + из-под снятой ≤ WAVE_LOW)
     const r = wholeTap(S, pick); open.clear(); for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i]) open.add(i); fx = P.x[pick]; fy = P.y[pick];   // яма может и сузиться — открытые заново
     flipN.push((r.faced || []).length); for (const j of r.faced || []) flipD.push(Math.hypot(P.x[j] - P.x[pick], P.y[j] - P.y[pick]));
+    if (r.wave){ waves.push(r.wave); facesBefore.push(facesPre); facesAfter.push(open.size); }
     cx += (P.x[pick] - cx) * 0.2; cy += (P.y[pick] - cy) * 0.2;
     if (r.joker !== undefined) jokAt.push(S.removed / P.N); if (r.assembled !== undefined) goldAt.push(S.removed / P.N);
   }
   chains.push(S.streak);
   const q = (arr, k) => { const a = arr.slice().sort((x, y) => x - y); return a.length ? a[Math.min(a.length - 1, Math.floor(k * a.length))] : 0; };
   return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won, open: sumOpen / Math.max(1, nOpen), chains, jokAt, goldAt, goldDraws, best: S.best, spreadP90: q(spread, 0.9),
-    flipDistP90: q(flipD, 0.9), flipPack: q(flipN.filter(n => n > 0), 0.5), flipShare: flipN.filter(n => n > 0).length / Math.max(1, flipN.length), flipPerMoveAvg: flipN.reduce((a, b) => a + b, 0) / Math.max(1, flipN.length), choice2: moves2 / Math.max(1, movesAll), S };
+    flipDistP90: q(flipD, 0.9), waveMed: q(waves, 0.5), waveP10: q(waves, 0.1), waveP90: q(waves, 0.9), wavesN: waves.length, facesBeforeAvg: facesBefore.reduce((a, b) => a + b, 0) / Math.max(1, facesBefore.length), facesAfterAvg: facesAfter.reduce((a, b) => a + b, 0) / Math.max(1, facesAfter.length),
+    flipPerMoveAvg: flipN.reduce((a, b) => a + b, 0) / Math.max(1, flipN.length), choice2: moves2 / Math.max(1, movesAll), S };
 }
 function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (!S.zone || S.zone[i]) && (S.whole ? wholeFits(S, i) : i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
 // бот поиска (сим): ideal — знает, где туз; dust — копает у самой сильной пыли (как человек по подсказке); random — куда попало
