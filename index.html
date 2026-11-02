@@ -314,9 +314,10 @@ const CFG = {
     // меньше одной (N карт — N снятий), поэтому пачки по 3–6 идут, пока есть запас неперевёрнутых открытых карт (старт, новая область),
     // дальше — 1–2 за снятие; это честный предел, см. DESIGN
     GROW: 1.6,            //   радиус вокруг снятой, в котором открытые рубашки переворачиваются
-    FLIP_MIN: 2,          //   меньше стольких — добираются ближайшие рубашки дальше GROW
+    FLIP_MIN: 2,          //   меньше стольких — добираются ближайшие рубашки дальше GROW, но только в кадре (FLIP_R): за кадром лица не
+                          //   открываются никогда — «иногда пусто» честнее, чем «иногда далеко» (решение 03.11); пустое снятие — пых пыли
     VIEW_R: 3.5,          //   радиус ямы для закрытых (тон по слою) от фронта, высот карты
-    FLIP_R: 9,            //   дальше этого от снятой волна не берёт (лиц нет совсем — фронт переезжает к ближайшей открытой)
+    FLIP_R: 3.5,          //   радиус кадра: дальше этого от снятой лицо не решается никогда (лиц нет совсем — фронт переезжает к ближайшей открытой)
     FRONT_K: 0.2,         //   доля шага фронта к снятой карте (EMA по ~5 картам)
     FAR_EVERY: 4,         //   каждые столько снятий цепочка ведётся к самому дальнему лицу… (подбор: 6/3 — разброс 5,4 на 3 000, 4/2 — 5,1)
     FAR_N: 2,             //   …и всегда, когда лиц дальше VIEW_R от фронта не меньше стольких
@@ -4023,7 +4024,7 @@ function drawOne(c, f, t){
     const A = f.pose, e = q * q, x = A.x + f.dir * 280 * e, y = A.y - Math.sin(Math.PI * Math.min(1, q * 1.2)) * 50 - 60 * e;
     c.save(); c.globalAlpha = 1 - q; c.translate(x, y); c.rotate(A.a + f.dir * 2.4 * e); drawCell(c, f.id, -A.w / 2, -A.h / 2, A.w, A.h); c.restore(); return true; }
   if (f.kind === 'magnet'){ glow(c, GLOW.cold, f.x, f.y, 50 + 40 * q, 0.7 * (1 - q)); return true; }   // магнит: свечение у колоды
-  if (f.kind === 'chain.break') return true;    // только журнал: отъезд и затухание ореола ведёт tick
+  if (f.kind === 'chain.break' || f.kind === 'puff.empty') return true;    // только журнал: отъезд и ореол ведёт tick; пыль — частицы
   if (f.kind === 'piecefly'){                  // «Один стог»: кусочек золотой тихо улетает к заголовку (в альбом) и тает
     const A = f.pose, sl = goldHome(), e = easeInOutSine(q), x = A.x + (sl.x - A.x) * e, y = A.y + (sl.y - A.y) * e - Math.sin(Math.PI * q) * 40, w = A.w + (sl.w - A.w) * e, h = w * 1.4;
     c.save(); c.globalAlpha = 1 - Math.max(0, (q - 0.85) / 0.15); glow(c, GLOW.gold, x, y, w * 0.9, 0.4 * (1 - q)); c.translate(x, y); c.rotate(A.a * (1 - q)); drawCell(c, f.cell, -w / 2, -h / 2, w, h); c.restore();
@@ -4695,6 +4696,7 @@ function searchHit(hit){
   r.opened.filter(j => j !== Z.gold).sort((a, b) => Math.hypot(P.x[a] - P.x[hit], P.y[a] - P.y[hit]) - Math.hypot(P.x[b] - P.x[hit], P.y[b] - P.y[hit]))
     .forEach((j, k) => { animCard(j, 1, t + FX.FLIP_DELAY_MS + stepMs * k); if (k < FX.FLIP_SOUND_MAX) Audio.flip(k); });
   if (Z.whole){ G.heatPt = { x: P.x[hit], z: P.y[hit] }; if (Z.streak >= FX.FIRE_AT && r.half === undefined){ const pz = quadPose(quad); burst(pz.x, pz.y, 4, 26, 420, Z.taps); } }   // «стог горит» — вокруг последней снятой; искры
+  if (Z.whole && !r.opened.length && !r.done){ const pz = quadPose(quad); spawn('puff', 5, pz.x, pz.y, { Q: quad, life: FX.PUFF_MS * 1.4 }, Z.taps); addFx({ kind: 'puff.empty', dur: FX.PUFF_MS * 1.4 }); Audio.land(0.5, 0.05); }   // пустое снятие (из-под карты ничего, рядом рубашек нет): пых пыли на месте — осознанно, не «зависло»
   if (r.dust > 0){                              // золотая пыль: чем ближе к тузу, тем гуще, выше и звонче; разлёт от стороны туза не зависит
     const pz = quadPose(quad), n = Math.round(4 + 16 * r.dust); spawn('dust', n, pz.x, pz.y, { k: r.dust }, Z.taps); addFx({ kind: 'dust', dur: 1800 });   // fx — журнал
     const h0 = Math.min(G.heatLevel, heatLevel(heatNow(t)));   // ступень, до которой тепло остыло с прошлой пыли
