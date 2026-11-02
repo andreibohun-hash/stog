@@ -273,7 +273,7 @@ const CFG = {
   },
   WHOLE: {               // «Один стог» (Андрей 02.11): весь стог — одна яма, разбираем до конца, сейв в рамках стога.
                           // Механика поиска без туза: любые открытые ±1, колода бесконечная. Калибровка — `node sim.mjs whole`
-    N: 10000,             //   карт в стоге (10 000 — стог бесконечного: граф с порогом перекрытия уже построен)
+    N: 3000,              //   карт в стоге (Андрей 02.11: 10 000 — ~4,5 ч, много); 10 000 — стог бесконечного, иначе свой граф тем же генератором
     HELP: 0.6,            //   колода: в кадре ни одна открытая не подходит к новой карте — с этой вероятностью подходит к одной из них
     MILE: 0.1,            //   праздник каждые столько стога: монеты и строка «разобрано N%»
     MILE_COINS: 10,
@@ -3675,8 +3675,8 @@ function paintLogo(){ if (!logoPainted && S.atlas){ drawPic($('logo-ace'), 'logo
 // стог за меню — в центре свободной части кадра: верх листа (CSS px от верха #frame; offsetTop — без анимации входа)
 // «Один стог» в меню: вторая кнопка; начатый стог — сколько осталось
 function wholeBtn(){
-  const Z = G.mode === 'search' && G.srch && G.srch.whole && !G.srch.won ? G.srch : null, sv = G.save.whole, N = wholePile().N;
-  const left = Z ? N - Z.removed : sv.seed && sv.removed.length ? N - sv.removed.length : 0;
+  const Z = G.mode === 'search' && G.srch && G.srch.whole && !G.srch.won ? G.srch : null, sv = G.save.whole, N = CFG.WHOLE.N;
+  const left = Z ? N - Z.removed : sv.seed && sv.n === N && sv.removed.length ? N - sv.removed.length : 0;
   return `<button class="btn wide" data-act="whole">${left ? 'Один стог · осталось ' + left.toLocaleString('ru-RU') : 'Один стог · ' + N.toLocaleString('ru-RU') + ' карт'}</button>`;
 }
 function menuView(){ if (G.screen === 'menu') G.viewBottom = $('card').offsetTop + $('overlay').offsetTop; }
@@ -4169,7 +4169,7 @@ function searchSave(force){
   const Z = G.srch; if (!Z || Z.won) return;
   if (!force && ++G.srchSaveN % 6) return;
   const sv = Z.whole ? G.save.whole : G.save.search, rem = []; for (let i = 0; i < Z.P.N; i++) if (!Z.alive[i]) rem.push(i);
-  Object.assign(sv, { k: Z.k, seed: Z.seed, removed: rem, top: Z.top, taps: Z.taps, draws: Z.draws, elapsed: Math.round(G.srchElapsed) }); save();
+  Object.assign(sv, { k: Z.k, seed: Z.seed, n: Z.P.N, removed: rem, top: Z.top, taps: Z.taps, draws: Z.draws, elapsed: Math.round(G.srchElapsed) }); save();
 }
 // whole — «Один стог»: та же механика без туза, своя ячейка сейва, стог бесконечного режима
 function startSearch(k, whole){
@@ -4178,12 +4178,12 @@ function startSearch(k, whole){
   const P = whole ? wholePile() : searchPile(k).P; setScenePile(P);
   const mk = (seed) => whole ? wholeStart(seed) : searchStart(k, seed);
   let Z;
-  if ((whole || sv.k === k) && sv.removed && sv.removed.length && sv.seed){        // продолжить: снятое — снова снято (без проверки рангов)
+  if ((whole ? sv.n === P.N : sv.k === k) && sv.removed && sv.removed.length && sv.seed){        // продолжить: снятое — снова снято (без проверки рангов)
     Z = mk(sv.seed); Z.seed = sv.seed;
     for (const i of sv.removed){ if (!Z.alive[i]) continue; Z.alive[i] = 0; Z.removed++; for (const j of Z.P.below[i]) if (Z.alive[j]) Z.cover[j]--; }
     Z.top = sv.top; Z.taps = sv.taps || 0; Z.draws = sv.draws || 0; Z.found = Z.gold >= 0 && Z.alive[Z.gold] && !Z.cover[Z.gold]; G.srchElapsed = sv.elapsed || 0;
   } else {
-    sv.runs = (sv.runs || 0) + 1; const seed = whole ? 9000 + sv.runs : 5000 + k * 101 + sv.runs; Z = mk(seed); Z.seed = seed; sv.k = k; sv.seed = seed; sv.removed = []; G.srchElapsed = 0;
+    sv.runs = (sv.runs || 0) + 1; const seed = whole ? 9000 + sv.runs : 5000 + k * 101 + sv.runs; Z = mk(seed); Z.seed = seed; sv.k = k; sv.seed = seed; sv.removed = []; sv.n = P.N; G.srchElapsed = 0;
   }
   G.wholeMile = whole ? Math.floor(Z.removed / P.N / CFG.WHOLE.MILE) : 0; G.pileH = 1;   // стог поиска — во весь рост: оседает по-настоящему, снятыми картами
   G.mode = 'search'; G.srch = Z; G.run = null; G.li = -1; G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; dropFx(); trayReset(); G.lv = newLevelMetrics(-1);
