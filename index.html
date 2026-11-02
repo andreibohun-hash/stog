@@ -307,15 +307,14 @@ const CFG = {
     // в VIEW_R от фронта, иначе ждут рубашкой. Показанное лицо из ямы не выходит никогда. Площадь ямы держит лимит лиц, а чтобы
     // далёкие лица не висели, генератор каждые FAR_EVERY снятий (или при FAR_N лицах дальше VIEW_R) ведёт цепочку к самому дальнему
     // лицу. Физически открытая, но не перевёрнутая карта — тёмная рубашка, тап — «яма растёт от снятых карт»
-    // Волны вместо капельницы (Андрей 03.11 v38: «открывать пачками по 3–4 в области разбора, не так явно подыгрывая»): лиц стало
-    // ≤ WAVE_LOW — волна: пачка WAVE_N открытых рубашек из области разбора (ближайшие к последней снятой, не дальше FLIP_R), волной от
-    // неё; пока лиц больше — новых лиц нет, кроме открывшихся из-под снятой в самой области (UNDER_R от снятой) — они переворачиваются
-    // сразу. Никакого добора «по одной до лимита». Размер волны случайный, чтобы ритм не читался
-    WAVE_LOW: 4,          //   волна приходит, когда лиц вверх не больше стольких (3 → 4: медиана серии 8 → 10, доборы 9,4 → 8,3%; подбор 03.11)
-    WAVE_N: [3, 5],       //   размер волны — случайно в этих границах…
-    WAVE_SMALL_P: 0.15,   //   …а с такой вероятностью — WAVE_SMALL (ритм сбивается)
-    WAVE_SMALL: 2,
-    UNDER_R: 2.0,         //   открывшиеся из-под снятой переворачиваются сразу, если не дальше стольких от неё (область разбора)
+    // За каждое снятие открывается пачка (Андрей 03.11 v40: «3–5–6 карт, которые лежат под картой, которую берёшь, и удобные, и
+    // неудобные — тактика, а не ведение за руку; пустых снятий не надо»): переворачиваются все открытые рубашки не дальше GROW от
+    // снятой (яма растёт вокруг снятых, как в v26) и открывшиеся из-под неё; если таких меньше FLIP_MIN — ближайшие рубашки дальше
+    // (до FLIP_R), чтобы снятие никогда не было пустым. Потолка лиц нет. Физика: за снятие из-под карты освобождается в среднем
+    // меньше одной (N карт — N снятий), поэтому пачки по 3–6 идут, пока есть запас неперевёрнутых открытых карт (старт, новая область),
+    // дальше — 1–2 за снятие; это честный предел, см. DESIGN
+    GROW: 1.6,            //   радиус вокруг снятой, в котором открытые рубашки переворачиваются
+    FLIP_MIN: 2,          //   меньше стольких — добираются ближайшие рубашки дальше GROW
     VIEW_R: 3.5,          //   радиус ямы для закрытых (тон по слою) от фронта, высот карты
     FLIP_R: 9,            //   дальше этого от снятой волна не берёт (лиц нет совсем — фронт переезжает к ближайшей открытой)
     FRONT_K: 0.2,         //   доля шага фронта к снятой карте (EMA по ~5 картам)
@@ -1382,10 +1381,8 @@ function wholeTap(S, i, how){
   S.alive[i] = 0; S.removed++; S.taps++; S.order.push(i);
   const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }
   frontStep(S, i);
-  const under = opened.filter(j => Math.hypot(P.x[j] - P.x[i], P.y[j] - P.y[i]) <= CFG.WHOLE.UNDER_R);   // из-под снятой, в области разбора — лицом сразу
-  res.faced = wholeFaces(S, under);
-  const wave = zoneUpdate(S, P.x[i], P.y[i]); res.wave = wave.length;   // лиц ≤ WAVE_LOW — волна пачкой от снятой
-  res.faced.push(...wholeFaces(S, wave)); res.opened = res.faced.slice();
+  const wave = zoneUpdate(S, P.x[i], P.y[i]); res.wave = wave.length;   // пачка от снятой: из-под неё и ближайшие рубашки, 3–6
+  res.faced = wholeFaces(S, wave); res.opened = res.faced.slice();
   if (S.removed === P.N) S.won = true; res.done = S.won;
   return res;
 }
@@ -1443,18 +1440,18 @@ function zoneOpen(S){ let n = 0; for (let i = 0; i < S.P.N; i++) if (S.alive[i] 
 // фронт — к снятой карте i (EMA)
 function frontStep(S, i){ const P = S.P, k = CFG.WHOLE.FRONT_K; S.front.x += (P.x[i] - S.front.x) * k; S.front.y += (P.y[i] - S.front.y) * k; }
 // яма: открытая карта в яме ⇔ лицо решено (навсегда); закрытая — в яме, если не дальше VIEW_R от фронта (тон по слою, иначе тёмная
-// рубашка). → волна: если лиц ≤ WAVE_LOW — WAVE_N (или n) открытых рубашек, ближайших к точке снятия (cx, cy; не дальше FLIP_R);
-// иначе пусто. Без (cx, cy) — от фронта (старт, восстановление: волна только при нуле лиц); лиц нет и перевернуть нечего — фронт
-// переезжает к ближайшей открытой
+// рубашка). → пачка за снятие: все открытые рубашки в GROW от точки снятия (cx, cy), но не меньше FLIP_MIN ближайших (до FLIP_R;
+// n — заданный размер) — открывшиеся из-под снятой идут первыми (они ближе всех). Без (cx, cy) — от фронта (старт;
+// восстановление — только при нуле лиц); лиц нет и перевернуть нечего — фронт переезжает к ближайшей открытой
 function zoneUpdate(S, cx, cy, n){
   const P = S.P, W = CFG.WHOLE, N = P.N; let faces = 0;
   const count = () => { const f = S.front; faces = 0;
     for (let i = 0; i < N; i++){ if (!S.alive[i]){ S.zone[i] = 0; continue; } S.zone[i] = S.cover[i] ? (Math.hypot(P.x[i] - f.x, P.y[i] - f.y) <= W.VIEW_R ? 1 : 0) : (S.face[i] >= 0 ? 1 : 0); if (!S.cover[i] && S.face[i] >= 0) faces++; } };
-  const wave = (x, y) => { const size = n || (S.R() < W.WAVE_SMALL_P ? W.WAVE_SMALL : W.WAVE_N[0] + Math.floor(S.R() * (W.WAVE_N[1] - W.WAVE_N[0] + 1)));
-    const cand = nearby(P, x, y, W.FLIP_R).filter(i => S.alive[i] && !S.cover[i] && S.face[i] < 0).map(i => [i, Math.hypot(P.x[i] - x, P.y[i] - y)]).sort((a, b) => a[1] - b[1]);
+  const wave = (x, y) => { const cand = nearby(P, x, y, W.FLIP_R).filter(i => S.alive[i] && !S.cover[i] && S.face[i] < 0).map(i => [i, Math.hypot(P.x[i] - x, P.y[i] - y)]).sort((a, b) => a[1] - b[1]);
+    const size = n || Math.max(W.FLIP_MIN, cand.filter(c => c[1] <= W.GROW).length);   // все в GROW, но не меньше FLIP_MIN
     return cand.slice(0, size).map(c => c[0]); };
   count(); const at = cx !== undefined;
-  let out = at ? (faces <= W.WAVE_LOW ? wave(cx, cy) : []) : (faces ? [] : wave(S.front.x, S.front.y));
+  let out = at ? wave(cx, cy) : (faces ? [] : wave(S.front.x, S.front.y));
   if (!faces && !out.length){ let b = -1, bd = 1e9; for (let i = 0; i < N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); if (d < bd){ bd = d; b = i; } }
     if (b >= 0){ S.front = { x: P.x[b], y: P.y[b] }; count(); out = wave(S.front.x, S.front.y); } }
   return out;
