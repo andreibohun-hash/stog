@@ -253,6 +253,8 @@ const CFG = {
       { shown: 60000, jokerPits: 22 },
       { shown: 150000, jokerPits: 30 },
     ],
+    OVERLAP_MIN: 0.08,    //   в стоге забега карта лежит на другой, только если накрывает ≥ столько её площади (Андрей 02.11: закрытые «без
+                          //   видимой причины» — касание краешком: связей с перекрытием < 8% — 36%, < 3% — 21%). Тест и поиск — без порога (как сим панели)
     JOKER_AT: 0.88,       //   радужный джокер — золотой следующей ямы, когда со счёта ушло столько доли кучи (осталось ~12%)
     HALF_AT: 0.45,        //   …а его первая половинка — на золотом тузе ямы, когда ушло столько (Андрей 02.11: «половинки в куче»);
                           //   без половинки джокер не выпадет: потерял её яму — она будет в следующей
@@ -350,7 +352,6 @@ const CFG = {
     SHADOW_DROP: 0.45,    //   …и на столько слоёв (THICK) ниже карты
     SHADOW_MAX: 96,       //   теней не больше стольких (InstancedMesh)
     DEPTH_SHADE: [1, 0.72, 0.56, 0.44],   //   закрытая карта ямы под 1 / 2 / 3 / 4+ картами — такой тон (Андрей 02.11: «понятнее, какая карта на каком слое»)
-    LOCK_MAX: 3,          //   на закрытой карте с видимой серединой — число карт, что её держат (до стольких; больше — «3+»)
     SHADOW_REFILL_RAD: 0.05, // тени — заново, когда свет по горизонтали повернулся больше чем на столько, рад (драг, наклон, нырок)
     SHADOW_REFILL_MOVE: 0.8, // поиск: тени — заново, когда точка взгляда уехала дальше стольких (высот карты)
     SHADOW_NEAR_SZ: 0.35, //   поиск: тени есть ближе этого зума (G.sz)…
@@ -580,7 +581,7 @@ const LEVELS = [
 const PILE_CELL = 1.25, PILE_MAXD2 = 1.23 * 1.23;
 const ckey = (gx, gy) => (gx + 4096) * 8192 + (gy + 4096);
 // Стог: карты падают по очереди, позже упавшая лежит выше; A лежит на B, если A позже и прямоугольники пересекаются (SAT).
-function makePile(seed, N, layers, rotDeg){
+function makePile(seed, N, layers, rotDeg, minCover){   // minCover — порог перекрытия для «лежит на» (0 — любое касание)
   N = N || CFG.PILE_N; layers = layers || CFG.PILE_LAYERS; rotDeg = rotDeg === undefined ? CFG.PILE_ROT_DEG : rotDeg;
   const CW = CFG.CARD_W, CH = CFG.CARD_H;
   const R = mulberry32(seed), rad = Math.sqrt(N * CW * CH / layers / Math.PI), sg = rad / 1.6;
@@ -598,7 +599,7 @@ function makePile(seed, N, layers, rotDeg){
     for (let ax = gx - 1; ax <= gx + 1; ax++) for (let ay = gy - 1; ay <= gy + 1; ay++){
       const list = grid.get(ckey(ax, ay)); if (!list) continue;
       for (const j of list){ if (j <= i) continue; const dx = x[j] - x[i], dy = y[j] - y[i]; if (dx * dx + dy * dy > PILE_MAXD2) continue;
-        if (overlap(P, i, j)){ P.above[i].push(j); P.below[j].push(i); } }
+        if (overlap(P, i, j) && (!minCover || coverFrac(P, i, j) >= minCover)){ P.above[i].push(j); P.below[j].push(i); } }
     }
   }
   return P;
@@ -616,6 +617,15 @@ function overlap(P, i, j){
     if (d > ri + rj) return false;
   }
   return true;
+}
+// доля площади карты i под картой j: сетка 8 × 11 точек по карте i, сколько из них внутри j
+function coverFrac(P, i, j){
+  const HW = CFG.CARD_W / 2, HH = CFG.CARD_H / 2, ci = P.c[i], si = P.s[i], cj = P.c[j], sj = P.s[j]; let n = 0;
+  for (let a = 0; a < 8; a++) for (let b = 0; b < 11; b++){
+    const u = (-1 + (2 * a + 1) / 8) * HW, v = (-1 + (2 * b + 1) / 11) * HH, dx = P.x[i] + u * ci - v * si - P.x[j], dy = P.y[i] + u * si + v * ci - P.y[j];
+    if (Math.abs(dx * cj + dy * sj) <= HW && Math.abs(-dx * sj + dy * cj) <= HH) n++;
+  }
+  return n / 88;
 }
 function nearby(P, px, py, r){
   const out = [], r2 = r * r;
@@ -985,10 +995,11 @@ function plusFiveRigged(L, st, R){
 // ================= бесконечный стог =================
 // Забег: свой живой стог (полный в начале), следующая золотая — рядом с прошлой, на ней 5–9 карт, яма из коридора.
 function endlessSpec(k){ const L = CFG.ENDLESS.PILES, n = L.length - 1; return k <= n ? L[k] : { shown: Math.round(L[n].shown * 2.5 ** (k - n) / 1000) * 1000, jokerPits: L[n].jokerPits + 8 * (k - n) }; }
-function endlessPile(){ return pile(); }   // вид и граф — стог теста у всех куч
+let EPILE = null;   // стог забега: раскладка стога теста, граф «лежит на» — с порогом перекрытия ENDLESS.OVERLAP_MIN
+function endlessPile(){ return EPILE || (EPILE = CFG.ENDLESS.OVERLAP_MIN ? makePile(CFG.PILE_SEED, CFG.PILE_N, CFG.PILE_LAYERS, CFG.PILE_ROT_DEG, CFG.ENDLESS.OVERLAP_MIN) : pile()); }
 // забег по куче k; alive и fake — из сейва (автосейв кучи), иначе куча целиком
 function endlessStart(seed, k, alive, fake, half){
-  const P = pile(), sp = endlessSpec(k || 0), a = alive || new Uint8Array(P.N).fill(1); let removed = 0; for (let i = 0; i < P.N; i++) removed += 1 - a[i];
+  const P = endlessPile(), sp = endlessSpec(k || 0), a = alive || new Uint8Array(P.N).fill(1); let removed = 0; for (let i = 0; i < P.N; i++) removed += 1 - a[i];
   return { seed, k: k || 0, P, alive: a, R: mulberry32(seed * 7919 + 101), aces: 0, removed, last: -1, pits: 0, joker: false, half: !!half, shown: sp.shown, fake: fake || 0 };
 }
 // сколько карт уходит со счёта кучи за яму, где снято n из L.n
@@ -1957,7 +1968,7 @@ function initScene(){
   S.envMat = new THREE.ShaderMaterial({ vertexShader: ENV_VS, fragmentShader: ENV_FS, vertexColors: true, uniforms: { uTime: S.mat.uniforms.uTime, uPop: { value: 2 }, uLight: S.mat.uniforms.uLight,
     uBackdrop: S.mat.uniforms.uBackdrop, uRes: S.mat.uniforms.uRes, uVC: S.mat.uniforms.uVC } });
   S.env = []; buildEnv();
-  setScenePile(pile());
+  setScenePile(!CFG.MODES.campaign && !CFG.MODES.search ? endlessPile() : pile());   // один режим — сразу стог забега (граф с порогом перекрытия)
   S.ok = true;
 }
 // Карта — скруглённый прямоугольник CARD_W × CARD_H (радиус 0,06, по 2 сегмента на угол): 12 точек контура и центр,
@@ -2381,21 +2392,6 @@ function assistNode(px, py, radius){
 }
 // рука показывает только видимую цель (word-cube): первая из кандидатов, у которой центр не закрыт и в кадре
 function pickVisibleTarget(cands, isVisible){ for (const i of cands) if (isVisible(i)) return i; return -1; }
-// сколько держит: на закрытых картах ямы, у которых середина на виду (её не накрывает другая карта), — кружок с числом карт ямы
-// сверху (до LOCK_MAX, дальше «3+»): видно и то, что держит лишь краешком
-function drawLocks(c, t){
-  if (!G.pitOn || !G.L || !G.st || (G.phase !== 'play' && G.phase !== 'stuck') || camTw) return;
-  const L = G.L, st = G.st, FX = CFG.FX, a = Math.min(1, (t - (G.lastMoveAt || 0)) / 250);
-  c.save(); c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = '900 11px ' + FONT;
-  for (let q = 0; q < L.n; q++){
-    if (!st.present[q] || !st.cover[q] || q === L.goldIdx) continue;
-    const i = L.nodes[q], p = cardCenter(i); if (pickCard(p.x, p.y) !== i) continue;
-    const x = p.x / scale, y = p.y / scale, n = st.cover[q]; if (y > curGeo().top - 10 || y < safeT / scale + HEADER_H + 8) continue;   // под панелью и шапкой — не рисуем
-    c.globalAlpha = a * 0.92; c.fillStyle = n === 1 ? 'rgba(235,245,255,.95)' : 'rgba(20,18,30,.78)'; c.beginPath(); c.arc(x, y, 9, 0, Math.PI * 2); c.fill();
-    c.fillStyle = n === 1 ? '#22304e' : '#fff7e6'; c.fillText(n > FX.LOCK_MAX ? FX.LOCK_MAX + '+' : String(n), x, y + 0.5);
-  }
-  c.restore();
-}
 function nodeVisible(q){
   const i = G.L.nodes[q], c = cardCenter(i);
   if (c.x < 8 || c.x > S.cssW - 8 || c.y < safeT + HEADER_H || c.y > S.cssH - (safeB + TRAY_H * scale)) return false;
@@ -3563,7 +3559,6 @@ function renderUI(t){
   if (G.trayK > 0.01 && ((G.L && G.st) || (G.mode === 'search' && G.srch))) drawTray(c, t);
   drawFx(c, t);
   drawParticles(c, t);
-  drawLocks(c, t);
   if (G.shrink) drawShrink(c, t);
   if (G.pileIntro) drawPileIntro(c, t);
   if (G.mode === 'endless'){ drawJokerWin(c, t); drawHalfWin(c, t); if (G.pileMove) drawPileNext(c, t); if (G.screen === 'game'){ drawJokerSlot(c, t); drawAbilities(c, t); } }
@@ -3832,7 +3827,7 @@ $('card').addEventListener('click', (e) => {
 // сброс теста из любого режима: забег засчитан, поиск сохранён, сцена — стог теста на общем плане, партии нет
 function resetProgress(){
   leaveMode('reset');
-  if (G.mode !== 'campaign'){ if (G.mode === 'search') searchSave(true); G.mode = 'campaign'; G.srch = null; G.run = null; setScenePile(pile()); }
+  if (G.mode !== 'campaign'){ if (G.mode === 'search') searchSave(true); G.mode = 'campaign'; G.srch = null; G.run = null; setScenePile(!CFG.MODES.campaign && !CFG.MODES.search ? endlessPile() : pile()); }
   if (Object.keys(G.save.metrics).length) G.save.metricsPrev = G.save.metrics;   // прежние итоги не теряются совсем
   G.save.level = 0; G.save.removed = {}; G.save.metrics = {}; G.save.coins = CFG.COINS_START; G.coinsShown = G.save.coins;
   G.save.endless.pile = null; G.save.endless.piles = 0; G.save.endless.pitsTotal = 0; G.save.endless.charges = {}; save();   // и куча забега (урок второй раз не показывается)
