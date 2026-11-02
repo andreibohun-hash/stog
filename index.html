@@ -381,7 +381,9 @@ const CFG = {
   PIT_ORBIT: 0.26,        // параллакс драгом в яме: ±рад по рыску (±15°)
   PIT_PITCH_SPAN: 0.16,   // и по наклону
   OVER_PITCH: 0.62,       // наклон камеры на общем плане, рад
-  OVER_YSCALE: 2.6,       // на общем плане стог вытянут по высоте во столько раз — силуэт стога
+  OVER_YSCALE: 2.6,       // на общем плане стог вытянут по высоте во столько раз — силуэт стога…
+  OVER_H_MAX: 1.75,       // …но не выше стольких ширин следа (Андрей 03.11: стог на 1 000 при ×2,6 — узкая колонна, высота 3 ширины). Высота стога
+                          // в мире ~7,8 при любом N (слои), ширина — 6,7 на 1 000 / 11,7 на 3 000: 1,75 даёт ×1,5 на 1 000 и ×2,6 (прежнее) на 3 000
   PIT_YSCALE: 0.25,       // в яме высоты сплющены: при утрированной толщине слоя карта на 10–16 слоёв выше съезжала под 55° (Андрей 01.11 — объём: 0,15 → 0,25, кадры 0,15/0,25/0,35 без съезда)
                           // почти на свою высоту, и то, что лежит на карте, на экране висело рядом (туз ямы 4, 30.10)
   ZOOM_MIN: 0.7,          // щипок: множитель расстояния
@@ -2632,7 +2634,8 @@ function overHome(li, yaw){ return overPose(SP(), S.maxH, (yaw !== undefined ? y
 // общий план кучи P (высота maxH): вся куча по ширине кадра; переезд между кучами считает его и для следующей
 function overPose(P, maxH, yaw){
   const fovV = CFG.FOV * Math.PI / 180, fovH = 2 * Math.atan(Math.tan(fovV / 2) * S.cssW / S.cssH), half = P.rad * 1.55;
-  return { kind: 'over', tx: 0, ty: maxH * 0.32 * CFG.OVER_YSCALE, tz: 0, yaw, pitch: CFG.OVER_PITCH, dist: half / Math.tan(fovH / 2) + P.rad * 0.6, ys: CFG.OVER_YSCALE };
+  const ys = Math.min(CFG.OVER_YSCALE, CFG.OVER_H_MAX * 2 * P.rad / Math.max(0.01, maxH));   // растяжение — по размеру стога: высота ≤ OVER_H_MAX ширины
+  return { kind: 'over', tx: 0, ty: maxH * 0.32 * ys, tz: 0, yaw, pitch: CFG.OVER_PITCH, dist: half / Math.tan(fovH / 2) + P.rad * 0.6, ys };
 }
 // Яма: камера ~55°. Карты в стоге повёрнуты на ±20° от одного направления, поэтому смотреть можно только вдоль него —
 // рыскание около 0 или около π (тогда лица всех карт поворачиваются на 180°: куча та же, ранг стоит прямо к экрану, урок
@@ -3978,7 +3981,7 @@ function drawWholeSpark(c, t){
   for (let j = 0; j < 6; j++){ const s = t / 1000 + j / 6, cyc = Math.floor(s), u = s - cyc, R = mulberry32(cyc * 6 + j + 1), h0 = 12 + R() * (ph - 70), dx = (R() - 0.5) * pw * 0.5, sz = 6 + 4 * R();
     c.globalAlpha = 0.9 * Math.sin(Math.PI * u) * sq; c.drawImage(STAR, x + dx - sz / 2, y - h0 - 40 * u - sz / 2, sz, sz); }
   c.restore(); glow(c, GLOW.warm, x, y, 1.4 * (14 + 10 * k) * sq, 0.9 * sq);
-  c.save(); c.globalAlpha = sq; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round'; outlined(c, Z.removed ? 'продолжаем здесь' : 'начинаем с верхушки', x, y - ph - 16, '800 14px ' + FONT, PAL.cream, 4); c.restore();
+  c.save(); c.globalAlpha = sq; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round'; outlined(c, Z.removed ? 'продолжаем здесь' : 'начинаем с верхушки', x, Math.max(safeT + HEADER_H + 14, y - ph - 16), '800 14px ' + FONT, PAL.cream, 4); c.restore();   // не под шапку
 }
 // веха «Одного стога»: над общим планом — «разобрано N%», осталось карт, полоса
 function drawMelt(c, t){
