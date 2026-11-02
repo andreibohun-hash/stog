@@ -275,6 +275,9 @@ const CFG = {
                           // Механика поиска без туза: любые открытые ±1, колода бесконечная. Калибровка — `node sim.mjs whole`
     N: 3000,              //   карт в стоге (Андрей 02.11: 10 000 — ~4,5 ч, много); 10 000 — стог бесконечного, иначе свой граф тем же генератором
     HELP: 0.6,            //   колода: в кадре ни одна открытая не подходит к новой карте — с этой вероятностью подходит к одной из них
+    ZONE0: 1.6,           //   яма растёт (Андрей 02.11: «чтобы не было так много открытых»): на старте — карты в этом радиусе от верхушки,
+    GROW: 1.1,            //   снятая карта берёт в яму карты в этом радиусе; открытые вне ямы лежат рубашкой и не снимаются
+    OUT_DIM: 0.5,         //   яркость карт вне ямы (в яме закрытые — 1 − 0,04 на карту сверху)
     MILE: 0.1,            //   праздник каждые столько стога: монеты и строка «разобрано N%»
     MILE_COINS: 10,
     COIN_DONE: 200,       //   монет за разобранный стог
@@ -1118,12 +1121,17 @@ function searchStart(k, seed){
 function searchTap(S, i){
   if (!S.alive[i]) return { ok: false, why: 'gone' };
   if (S.cover[i] > 0) return { ok: false, why: 'covered' };
+  if (S.zone && !S.zone[i]) return { ok: false, why: 'far' };
   const P = S.P;
   if (i === S.gold){ S.alive[i] = 0; S.removed++; S.taps++; S.won = true; return { ok: true, gold: true, opened: [], dust: 1 }; }
   if (!ok(rk(S.top), rk(S.face[i]))) return { ok: false, why: 'rank' };
   S.alive[i] = 0; S.removed++; S.taps++; S.top = S.face[i]; S.streak++;
   const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }
-  if (S.whole){ if (S.removed === P.N) S.won = true; return { ok: true, opened, dust: 0, done: S.won }; }   // «Один стог»: туза нет, цель — снять всё
+  if (S.whole){                                // «Один стог»: туза нет, цель — снять всё; открывшиеся — те, что стали открыты и в яме
+    const fresh = zoneGrow(S, i); zoneEnsure(S, fresh);
+    const out = [...new Set([...opened, ...fresh])].filter(j => S.alive[j] && !S.cover[j] && S.zone[j]);
+    if (S.removed === P.N) S.won = true; return { ok: true, opened: out, dust: 0, done: S.won };
+  }
   if (opened.includes(S.gold)) S.found = true;
   const d = Math.hypot(P.x[i] - P.x[S.gold], P.y[i] - P.y[S.gold]);
   return { ok: true, opened, dust: d < CFG.SEARCH.DUST_R ? 1 - d / CFG.SEARCH.DUST_R : 0 };
@@ -1133,7 +1141,8 @@ function searchTap(S, i){
 function searchDraw(S, near){
   const r0 = rk(S.top); let top; do top = Math.floor(S.R() * 52); while (rk(top) === r0);
   if (near && near.length && S.R() < CFG.WHOLE.HELP && !near.some(i => ok(rk(top), rk(S.face[i])))){
-    const nr = (rk(S.face[near[Math.floor(S.R() * near.length)]]) + (S.R() < 0.5 ? 1 : 12)) % 13;   // ±1 с переходом K↔A
+    const f = rk(S.face[near[Math.floor(S.R() * near.length)]]); let nr = (f + (S.R() < 0.5 ? 1 : 12)) % 13;   // ±1 с переходом K↔A
+    if (nr === r0) nr = (2 * f - nr + 13) % 13;   // та же, что сейчас, — с другой стороны (на 1 больше ↔ меньше)
     if (nr !== r0) top = nr + 13 * Math.floor(S.R() * 4);
   }
   S.top = top; S.streak = 0; S.taps++; S.draws++;
@@ -1144,15 +1153,28 @@ function wholePile(){ const W = CFG.WHOLE; return W.N === CFG.PILE_N ? endlessPi
 function wholeStart(seed){
   const P = wholePile(), R = mulberry32(seed);
   const face = new Int8Array(P.N); for (let i = 0; i < P.N; i++) face[i] = Math.floor(R() * 52);
-  return { k: 0, whole: true, P, gold: -1, R, face, alive: new Uint8Array(P.N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)),
+  const S = { k: 0, whole: true, P, gold: -1, R, face, alive: new Uint8Array(P.N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)), zone: new Uint8Array(P.N),
     top: Math.floor(R() * 52), streak: 0, taps: 0, draws: 0, removed: 0, found: false, won: false };
+  for (const j of nearby(P, 0, 0, CFG.WHOLE.ZONE0)) S.zone[j] = 1;
+  zoneEnsure(S, []); return S;
+}
+// яма растёт вокруг снятой i → новые карты ямы
+function zoneGrow(S, i){ const P = S.P, out = []; for (const j of nearby(P, P.x[i], P.y[i], CFG.WHOLE.GROW)) if (!S.zone[j]){ S.zone[j] = 1; out.push(j); } return out; }
+// в яме не осталось открытых — берёт ближайшую открытую к центру ямы вместе с соседями (подол, отдельные островки)
+function zoneEnsure(S, out){
+  const P = S.P; let cx = 0, cy = 0, n = 0;
+  for (let i = 0; i < P.N; i++) if (S.alive[i] && S.zone[i]){ if (!S.cover[i]) return; cx += P.x[i]; cy += P.y[i]; n++; }
+  if (n){ cx /= n; cy /= n; }
+  let b = -1, bd = 1e9; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - cx, P.y[i] - cy); if (d < bd){ bd = d; b = i; } }
+  if (b < 0) return; S.zone[b] = 1; out.push(b); out.push(...zoneGrow(S, b));
 }
 // бот «Одного стога» (сим): играет в окне радиуса view (высот карты) у последней снятой, как человек в кадре; окно опустело —
 // переезжает к ближайшей открытой. → { taps, draws, moves, jumps, won }
 function wholeBotRun(seed, view, maxTaps){
-  const S = wholeStart(seed), P = S.P, open = new Set(); let fx = 0, fy = 0, jumps = 0;
-  for (let i = 0; i < P.N; i++) if (!S.cover[i]) open.add(i);
+  const S = wholeStart(seed), P = S.P, open = new Set(); let fx = 0, fy = 0, jumps = 0, sumOpen = 0, nOpen = 0;
+  for (let i = 0; i < P.N; i++) if (!S.cover[i] && S.zone[i]) open.add(i);
   while (!S.won && S.taps < (maxTaps || 60000)){
+    sumOpen += open.size; nOpen++;
     let near = []; for (const i of open) if (Math.hypot(P.x[i] - fx, P.y[i] - fy) <= view) near.push(i);
     if (!near.length){ let b = -1, bd = 1e9; for (const i of open){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; b = i; } } fx = P.x[b]; fy = P.y[b]; jumps++; continue; }
     const pl = near.filter(i => ok(rk(S.top), rk(S.face[i])));
@@ -1160,9 +1182,9 @@ function wholeBotRun(seed, view, maxTaps){
     let pick = pl[0], bd = 1e9; for (const i of pl){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; pick = i; } }
     const r = searchTap(S, pick); open.delete(pick); for (const j of r.opened) open.add(j); fx = P.x[pick]; fy = P.y[pick];
   }
-  return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won };
+  return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won, open: sumOpen / Math.max(1, nOpen) };
 }
-function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
+function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (!S.zone || S.zone[i]) && (i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
 // бот поиска (сим): ideal — знает, где туз; dust — копает у самой сильной пыли (как человек по подсказке); random — куда попало
 function searchBotRun(k, bot, seed, maxTaps){
   const S = searchStart(k, seed), P = S.P, R = mulberry32(seed * 31 + 7), open = new Set();
@@ -2129,7 +2151,8 @@ function refreshSearch(){
     if (!Z.alive[i]){ a[o + 3] = -1; continue; }
     const cov = Z.cover[i];
     if (i === Z.gold){ a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = cov ? 0.85 : 1; a[o + 3] = 7; }
-    else if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.55, 0.9 - 0.04 * cov); a[o + 3] = 2; }
+    else if (Z.zone && !Z.zone[i]){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = CFG.WHOLE.OUT_DIM; a[o + 3] = 2; }   // «Один стог»: вне ямы — рубашкой и темнее, яма читается светлым пятном
+    else if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.55, (Z.zone ? 1 : 0.9) - 0.04 * cov); a[o + 3] = 2; }
     else { const id = Z.face[i]; a[o] = id; a[o + 1] = CELL_FAR0 + id; a[o + 2] = 1; a[o + 3] = 3; }
   }
   S.aData.needsUpdate = true;
@@ -4081,6 +4104,7 @@ function searchHit(hit){
     addFx({ kind: 'hold', quad: cardQuad(hit), quads: nearQuads(cardQuad(hit), holders.map(j => cardQuad(j)), CFG.FX.HOLD_SEARCH_MAX), dur: CFG.HOLD_HINT_MS, info: 'holders=' + holders.length }); Audio.peek(); buzz('closed');
     tipOnce('hold', 'Её держат обведённые карты — сними их', CFG.FX.TIP_HOLD_MS); return;
   }
+  if (Z.zone && !Z.zone[hit]){ deny(hit); Audio.peek(); buzz('closed'); tipOnce('far', 'Яма растёт от снятых карт — снимай у её края', CFG.FX.TIP_HOLD_MS); log('input', 'whole.far'); return; }
   if (hit !== Z.gold && !ok(rk(Z.top), rk(Z.face[hit]))){ G.lv.wrong++; deny(hit); denyHop(); Audio.wrong(); buzz('wrong'); return; }
   const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold]; G.preWinTop = prev; const r = searchTap(Z, hit);
   if (!r.ok) return;                            // 'gone' приходит без opened
@@ -4115,7 +4139,7 @@ function searchHit(hit){
 // «Один стог»: открытые карты в кадре (над панелью, под шапкой)
 function wholeInView(){
   const Z = G.srch, out = [], y0 = safeT + HEADER_H, y1 = trayTop() * scale;
-  for (let i = 0; i < Z.P.N; i++) if (Z.alive[i] && !Z.cover[i]){ const c = cardCenter(i); if (c.z <= 1 && c.x >= 0 && c.x <= S.cssW && c.y >= y0 && c.y <= y1) out.push(i); }
+  for (let i = 0; i < Z.P.N; i++) if (Z.alive[i] && !Z.cover[i] && Z.zone[i]){ const c = cardCenter(i); if (c.z <= 1 && c.x >= 0 && c.x <= S.cssW && c.y >= y0 && c.y <= y1) out.push(i); }
   return out;
 }
 // после снятия: веха каждые WHOLE.MILE стога; в кадре не осталось открытых — камера едет к ближайшей открытой
@@ -4125,7 +4149,7 @@ function wholeAfterTap(t){
     coins(W.MILE_COINS, VW / 2, H * 0.32, 'разобрано ' + pct + '%', { rain: true }); Audio.rise(); tip('Разобрано ' + pct + '% стога', 3000); log('event', 'whole.mile', pct + '%'); }
   if (pxuNow() < 34 || wholeInView().length) return;
   const f = G.sfocus; let b = -1, bd = 1e9;
-  for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i]){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.z); if (d < bd){ bd = d; b = i; } }
+  for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i] && Z.zone[i]){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.z); if (d < bd){ bd = d; b = i; } }
   if (b < 0) return;
   G.sfocusTw = { from: { ...f }, to: { x: P.x[b], z: P.y[b] }, t0: t + 300, ms: REDUCED ? 1 : CFG.FX.SEARCH_FIND_MS }; log('fx.start', 'cam.sfocus', 'whole.next');
 }
@@ -4181,6 +4205,7 @@ function startSearch(k, whole){
   if ((whole ? sv.n === P.N : sv.k === k) && sv.removed && sv.removed.length && sv.seed){        // продолжить: снятое — снова снято (без проверки рангов)
     Z = mk(sv.seed); Z.seed = sv.seed;
     for (const i of sv.removed){ if (!Z.alive[i]) continue; Z.alive[i] = 0; Z.removed++; for (const j of Z.P.below[i]) if (Z.alive[j]) Z.cover[j]--; }
+    if (Z.zone){ for (const i of sv.removed) if (i >= 0 && i < Z.P.N) zoneGrow(Z, i); zoneEnsure(Z, []); }   // яма — вокруг снятых
     Z.top = sv.top; Z.taps = sv.taps || 0; Z.draws = sv.draws || 0; Z.found = Z.gold >= 0 && Z.alive[Z.gold] && !Z.cover[Z.gold]; G.srchElapsed = sv.elapsed || 0;
   } else {
     sv.runs = (sv.runs || 0) + 1; const seed = whole ? 9000 + sv.runs : 5000 + k * 101 + sv.runs; Z = mk(seed); Z.seed = seed; sv.k = k; sv.seed = seed; sv.removed = []; sv.n = P.N; G.srchElapsed = 0;
@@ -4191,7 +4216,7 @@ function startSearch(k, whole){
   G.aliveNow = Z.alive; clearAnims(); refreshData(); S.mesh.material.uniforms.uDim.value = 0; S.mesh.material.uniforms.uFaceRot.value = 0; S.faceRot = 0;
   G.sz = G.szTo = Z.removed ? 0.3 : 1; G.sfocus = { x: 0, z: 0 }; G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
   G.phase = 'play'; goto('game'); save();
-  tip(whole ? (Z.removed ? 'Продолжаем стог' : 'Весь стог — одна яма. Тапни — ближе') : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
+  tip(whole ? (Z.removed ? 'Продолжаем стог' : 'Яма начинается на верхушке — тапни её') : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
   hud(); log('event', whole ? 'whole.start' : 'search.start', 'pile=' + (k + 1) + ' n=' + P.N + ' resumed=' + !!Z.removed);
 }
 function fmtClock(ms){ const s0 = Math.floor(ms / 1000); return Math.floor(s0 / 60) + ':' + String(s0 % 60).padStart(2, '0'); }
@@ -4425,6 +4450,7 @@ window.STOG = {
     startSearch(0, true); const Z = G.srch, P = Z.P;
     while (frac && Z.removed < frac * P.N){ const open = []; for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i]) open.push(i);
       for (const i of open){ if (Z.removed >= frac * P.N) break; Z.alive[i] = 0; Z.removed++; for (const j of P.below[i]) if (Z.alive[j]) Z.cover[j]--; } }
+    if (frac){ for (let i = 0; i < P.N; i++) if (!Z.alive[i]) zoneGrow(Z, i); zoneEnsure(Z, []); }
     G.wholeMile = Math.floor(Z.removed / P.N / CFG.WHOLE.MILE); refreshData(); hud(); searchSave(true); return this.sstate(); },
   szoom(z){ if (G.srch){ G.szTo = G.sz = z; } return z; },   // поиск: зум (0 — карта ~72 px, 1 — вся куча)
   sstate(){ const Z = G.srch; return Z ? { pile: Z.k + 1, n: Z.P.N, removed: Z.removed, taps: Z.taps, onGold: Z.cover[Z.gold], found: Z.found, won: Z.won, sz: +G.sz.toFixed(2), ys: +S.ys.toFixed(2), pxu: Math.round(pxuNow()), heat: +heatNow(now()).toFixed(2), ms: Math.round(G.srchElapsed), phase: G.phase, screen: G.screen } : null; },
