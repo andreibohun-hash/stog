@@ -271,6 +271,14 @@ const CFG = {
     GLINT_COVER: 3,       //   туз блестит искрой на общем плане, когда на нём лежит не больше стольких карт
     COIN_FIND: 50,        //   монет за найденный туз
   },
+  WHOLE: {               // «Один стог» (Андрей 02.11): весь стог — одна яма, разбираем до конца, сейв в рамках стога.
+                          // Механика поиска без туза: любые открытые ±1, колода бесконечная. Калибровка — `node sim.mjs whole`
+    N: 10000,             //   карт в стоге (10 000 — стог бесконечного: граф с порогом перекрытия уже построен)
+    HELP: 0.6,            //   колода: в кадре ни одна открытая не подходит к новой карте — с этой вероятностью подходит к одной из них
+    MILE: 0.1,            //   праздник каждые столько стога: монеты и строка «разобрано N%»
+    MILE_COINS: 10,
+    COIN_DONE: 200,       //   монет за разобранный стог
+  },
   DRAW_MARGIN: 3,         // планировщик берёт добор при живом ходе, только если тот выигрывает на столько прогонов чаще
   PLAN_N: 24,             // прогонов планировщика на решение
   CORRIDOR_GREEDY: [45, 65],   // коридор отбора ям: жадный к тузу, % побед без «+5»
@@ -1115,11 +1123,45 @@ function searchTap(S, i){
   if (!ok(rk(S.top), rk(S.face[i]))) return { ok: false, why: 'rank' };
   S.alive[i] = 0; S.removed++; S.taps++; S.top = S.face[i]; S.streak++;
   const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }
+  if (S.whole){ if (S.removed === P.N) S.won = true; return { ok: true, opened, dust: 0, done: S.won }; }   // «Один стог»: туза нет, цель — снять всё
   if (opened.includes(S.gold)) S.found = true;
   const d = Math.hypot(P.x[i] - P.x[S.gold], P.y[i] - P.y[S.gold]);
   return { ok: true, opened, dust: d < CFG.SEARCH.DUST_R ? 1 - d / CFG.SEARCH.DUST_R : 0 };
 }
-function searchDraw(S){ S.top = Math.floor(S.R() * 52); S.streak = 0; S.taps++; S.draws++; }
+// добор: ранг не повторяет текущую (Андрей 02.11: повторы подряд раздражают); near — открытые карты в кадре («Один стог»):
+// ни одна не подходит — с вероятностью WHOLE.HELP новая карта подходит к случайной из них
+function searchDraw(S, near){
+  const r0 = rk(S.top); let top; do top = Math.floor(S.R() * 52); while (rk(top) === r0);
+  if (near && near.length && S.R() < CFG.WHOLE.HELP && !near.some(i => ok(rk(top), rk(S.face[i])))){
+    const nr = (rk(S.face[near[Math.floor(S.R() * near.length)]]) + (S.R() < 0.5 ? 1 : 12)) % 13;   // ±1 с переходом K↔A
+    if (nr !== r0) top = nr + 13 * Math.floor(S.R() * 4);
+  }
+  S.top = top; S.streak = 0; S.taps++; S.draws++;
+}
+// ================= «Один стог»: весь стог — одна яма, разбираем до конца =================
+let WPILE = null;
+function wholePile(){ const W = CFG.WHOLE; return W.N === CFG.PILE_N ? endlessPile() : WPILE || (WPILE = makePile(CFG.PILE_SEED, W.N, CFG.PILE_LAYERS, CFG.PILE_ROT_DEG, CFG.ENDLESS.OVERLAP_MIN)); }
+function wholeStart(seed){
+  const P = wholePile(), R = mulberry32(seed);
+  const face = new Int8Array(P.N); for (let i = 0; i < P.N; i++) face[i] = Math.floor(R() * 52);
+  return { k: 0, whole: true, P, gold: -1, R, face, alive: new Uint8Array(P.N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)),
+    top: Math.floor(R() * 52), streak: 0, taps: 0, draws: 0, removed: 0, found: false, won: false };
+}
+// бот «Одного стога» (сим): играет в окне радиуса view (высот карты) у последней снятой, как человек в кадре; окно опустело —
+// переезжает к ближайшей открытой. → { taps, draws, moves, jumps, won }
+function wholeBotRun(seed, view, maxTaps){
+  const S = wholeStart(seed), P = S.P, open = new Set(); let fx = 0, fy = 0, jumps = 0;
+  for (let i = 0; i < P.N; i++) if (!S.cover[i]) open.add(i);
+  while (!S.won && S.taps < (maxTaps || 60000)){
+    let near = []; for (const i of open) if (Math.hypot(P.x[i] - fx, P.y[i] - fy) <= view) near.push(i);
+    if (!near.length){ let b = -1, bd = 1e9; for (const i of open){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; b = i; } } fx = P.x[b]; fy = P.y[b]; jumps++; continue; }
+    const pl = near.filter(i => ok(rk(S.top), rk(S.face[i])));
+    if (!pl.length){ searchDraw(S, near); continue; }
+    let pick = pl[0], bd = 1e9; for (const i of pl){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; pick = i; } }
+    const r = searchTap(S, pick); open.delete(pick); for (const j of r.opened) open.add(j); fx = P.x[pick]; fy = P.y[pick];
+  }
+  return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won };
+}
 function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
 // бот поиска (сим): ideal — знает, где туз; dust — копает у самой сильной пыли (как человек по подсказке); random — куда попало
 function searchBotRun(k, bot, seed, maxTaps){
@@ -1186,7 +1228,7 @@ const G = {
   aliveNow: null,          // Uint8Array: живые карты стога сейчас (без снятых в прошлых ямах и в текущей)
   pitOn: false,            // стиль ямы включён: закрытые рубашкой, остальной стог тусклый
   sparks: new Set(),       // узлы ямы с искрой-монетой
-  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, music: true, removed: {}, metrics: {}, plus5Free: {}, endless: { best: 0, runs: 0, aces: 0, pile: null, piles: 0, jokers: 0, charges: {} }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} },
+  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, music: true, removed: {}, metrics: {}, plus5Free: {}, endless: { best: 0, runs: 0, aces: 0, pile: null, piles: 0, jokers: 0, charges: {} }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} }, whole: { runs: 0, wins: 0, seed: 0, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0 },
     seen: {} }, loadSave()),   // seen — разовые подсказки и интро режимов: endless, search, endlessAce, hold, cover1, dust, glint, zoom
   mode: 'campaign',       // campaign — 10 ям теста; endless — бесконечный стог; search — «Иголка в стоге»
   run: null,              // забег бесконечного стога (endlessStart): свой живой стог, тузы, снятые карты
@@ -2467,7 +2509,7 @@ function startEndless(){
   G.run = endlessStart(E.runs, sv.k, alive, sv.fake || 0, sv.half); G.run.coins = 0; G.run.fake0 = G.run.fake; E.charges = E.charges || {}; G.wildArmed = false;
   G.run.tutor = !G.save.seen.endlessTut && !sv.k && !G.run.removed;   // первая яма самого первого забега — урок G.li = -1; G.attempt = 0; dropFx(); trayReset(); G.plus5Used = 0; G.offer = null;
   G.st = sv.stock && sv.stock.length ? { top: sv.top, stock: sv.stock.slice(), streak: sv.streak || 0 } : null;   // колода из сейва: endlessDeal берёт top, stock, streak
-  G.aliveNow = G.run.alive; G.lv = newLevelMetrics(-1);
+  G.aliveNow = G.run.alive; G.lv = newLevelMetrics(-1); G.pileH = pileHTarget();   // из «Одного стога» — куча снова осевшая по счёту
   goto('game'); log('event', 'endless.start', 'run=' + G.run.seed + ' pile=' + (sv.k + 1) + ' left=' + endlessLeft() + ' deck=' + (G.st ? G.st.stock.length : 'new'));
   endlessSave(); nextEndlessPit(true);
 }
@@ -2756,7 +2798,7 @@ function endEndless(why){
 function bankRun(why){ const r = G.run; if (G.mode !== 'endless' || !r || r.over) return; endlessSave(); dropPreview(); r.over = true; const E = G.save.endless; E.aces += r.aces; if (r.aces > E.best) E.best = r.aces; save(); log('event', 'endless.over', 'aces=' + r.aces + ' why=' + why); }
 // уход из текущего режима: забег засчитывается, победа в яме, взятая под меню, записывается
 // (тряска и подсказки прежней сцены не переходят в новую; новый режим ставит камеру сам — к общему плану до меню не возвращаемся)
-function leaveMode(why){ bankRun(why); if (S.faceSeed !== FACE_SEED && S.P) setFaces(FACE_SEED); G.shake = null; G.homeBeforeMenu = null; G.shrink = null; G.pileIntro = null; G.pileMove = null; setGoldSkin('gold'); tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
+function leaveMode(why){ if (G.mode === 'search' && G.srch) searchSave(true); bankRun(why); if (S.faceSeed !== FACE_SEED && S.P) setFaces(FACE_SEED); G.shake = null; G.homeBeforeMenu = null; G.shrink = null; G.pileIntro = null; G.pileMove = null; setGoldSkin('gold'); tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
 function goalTip(){ const og = G.goalShown === null ? Math.max(0, onGold(G.st)) : G.goalShown, j = G.L && G.L.joker; return og ? 'Сними с ' + (j ? 'джокера' : 'туза') + ' ещё ' + og + ' ' + plural(og, 'карту', 'карты', 'карт') : (j ? 'Джокер' : 'Туз') + ' открыт — возьми его с K или 2'; }
 function playNode(q, how){
   const L = G.L, st = G.st, i = L.nodes[q], wild = !!G.wildArmed && G.mode === 'endless';
@@ -3302,6 +3344,17 @@ function drawSearchGoal(c, t, Z){
   c.fillStyle = col; c.font = '900 13px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(word, a.x, a.y + a.h / 2 + 10);
   c.fillStyle = PAL.creamMuted; c.font = '800 12px ' + FONT; c.fillText(fmtClock(G.srchElapsed), a.x, a.y + a.h / 2 + 24);
 }
+// «Один стог»: сколько осталось, дуга — разобранная доля, время
+function drawWholeGoal(c, t, Z){
+  const a = goalGeo(), left = Z.P.N - Z.removed, k = Z.removed / Z.P.N, A0 = 5 * Math.PI / 6;
+  goalPlate(c, a, 'СТОГ', a.y - a.h / 2 - 34, a.h + 66, a.y - a.h / 2 - 22);
+  c.lineWidth = 5; c.strokeStyle = 'rgba(255,255,255,.12)'; c.beginPath(); c.arc(a.x, a.y, 40, A0, A0 + 4 * Math.PI / 3); c.stroke();
+  if (k > 0.002){ c.strokeStyle = PAL.goldText; c.beginPath(); c.arc(a.x, a.y, 40, A0, A0 + 4 * Math.PI / 3 * k); c.stroke(); }
+  c.fillStyle = PAL.cream; c.font = '900 ' + (left >= 10000 ? 17 : 20) + 'px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(left.toLocaleString('ru-RU'), a.x, a.y - 2);
+  c.fillStyle = PAL.creamMuted; c.font = '800 11px ' + FONT; c.fillText(plural(left, 'карта', 'карты', 'карт'), a.x, a.y + 16);
+  c.fillStyle = PAL.goldText; c.font = '900 13px ' + FONT; c.fillText(Math.floor(k * 100) + '%', a.x, a.y + a.h / 2 + 10);
+  c.fillStyle = PAL.creamMuted; c.font = '800 12px ' + FONT; c.fillText(fmtClock(G.srchElapsed), a.x, a.y + a.h / 2 + 24);
+}
 // кнопка «вся куча» над панелью справа: лупа с «−» (отъехать на всю кучу), на всей куче — с «+» (обратно к той же точке)
 function zoomAllHit(p){ return G.mode === 'search' && G.trayK > 0.5 && Math.hypot(p.x / scale - (VW - 34), p.y / scale - (curGeo().top - 34)) <= 24; }
 function drawZoomAll(c, top){
@@ -3323,7 +3376,7 @@ function drawSearchTray(c, t){
   if (!Z.won) drawGhosts(c, rk(fl ? ((t - fl.t0) / fl.dur < 0.5 ? fl.prev : fl.id) : Z.top), g, gy, t);
   drawDiscard(c, g, fl ? fl.prev : Z.won ? (G.preWinTop === null ? Z.top : G.preWinTop) : Z.top, t);   // летящая карта главнее победы (как в яме)
   drawDeck(c, deckGeo(), Infinity, t, false, true);
-  drawSearchGoal(c, t, Z);
+  if (Z.whole) drawWholeGoal(c, t, Z); else drawSearchGoal(c, t, Z);
   drawZoomAll(c, top);
 }
 // блеск туза в куче поиска: когда на нём осталось мало карт, сквозь щели видна искра (на общем плане — главная подсказка)
@@ -3620,6 +3673,12 @@ function drawPic(cv, kind){
 let logoPainted = false;
 function paintLogo(){ if (!logoPainted && S.atlas){ drawPic($('logo-ace'), 'logo'); logoPainted = true; } }
 // стог за меню — в центре свободной части кадра: верх листа (CSS px от верха #frame; offsetTop — без анимации входа)
+// «Один стог» в меню: вторая кнопка; начатый стог — сколько осталось
+function wholeBtn(){
+  const Z = G.mode === 'search' && G.srch && G.srch.whole && !G.srch.won ? G.srch : null, sv = G.save.whole, N = wholePile().N;
+  const left = Z ? N - Z.removed : sv.seed && sv.removed.length ? N - sv.removed.length : 0;
+  return `<button class="btn wide" data-act="whole">${left ? 'Один стог · осталось ' + left.toLocaleString('ru-RU') : 'Один стог · ' + N.toLocaleString('ru-RU') + ' карт'}</button>`;
+}
 function menuView(){ if (G.screen === 'menu') G.viewBottom = $('card').offsetTop + $('overlay').offsetTop; }
 // выход из меню в общий план: камера возвращается к расстоянию до меню (отъезд — в goto('menu'))
 function menuCamBack(){
@@ -3704,7 +3763,7 @@ function goto(screen){
     const tEndl = tile('endless', 'endless', 'Бесконечный', 'куча ' + (ek + 1) + ' · ' + (eLeft < eN ? 'осталось ' + eLeft.toLocaleString('ru-RU') : eN.toLocaleString('ru-RU') + ' карт'));
     const ep1 = G.save.endless.pile;
     const top = !CFG.MODES.campaign && !CFG.MODES.search ? (M.runLive ? main('resume', 'Продолжить · куча ' + (G.run.k + 1)) : main('endless', ep1 ? 'Продолжить · куча ' + (ek + 1) : 'Старт'))
-        + (ep1 || M.runLive ? `<p class="sub">осталось ${(M.runLive ? endlessLeft() : eLeft).toLocaleString('ru-RU')} из ${eN.toLocaleString('ru-RU')} карт</p>` : '')
+        + (ep1 || M.runLive ? `<p class="sub">осталось ${(M.runLive ? endlessLeft() : eLeft).toLocaleString('ru-RU')} из ${eN.toLocaleString('ru-RU')} карт</p>` : '') + wholeBtn()
       : M.pitLive ? main('resume', 'Продолжить яму ' + (G.li + 1)) + `<div class="tiles">${tSrch}${tEndl}</div>`
       : M.runLive ? main('resume', 'Продолжить кучу ' + (G.run.k + 1) + ' · осталось ' + endlessLeft().toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tSrch}</div>`
       : M.srchLive ? main('search', 'Продолжить поиск · куча ' + G.srch.P.N.toLocaleString('ru-RU')) + `<div class="tiles">${tPlay}${tEndl}</div>`
@@ -3728,7 +3787,8 @@ function goto(screen){
     const endl = '<h3>Бесконечный стог</h3>' + row('endless', 'Ямы подряд, колода общая. Золотой туз — +' + CFG.ENDLESS.GOLD_CARDS + ' карт. В середине кучи на тузе — половинка джокера, вторая — в конце: собери джокера и переходи к куче побольше. Колода кончилась — куча ждёт.')
       + row('', 'Собранный джокер — способность с зарядами (кнопка над колодой): «Радужный» — любая карта, «Магнит» — нужная из колоды, «Метла» — смести две.');
     const srch = '<h3>Иголка в стоге</h3>' + row('search', 'В куче один золотой туз. Снимай любые открытые ±1, колода бесконечная. Золотая пыль — туз рядом, искра — почти наверху. Щипок или кнопка «вся куча» — увидеть кучу.');
-    const order = !CFG.MODES.campaign && !CFG.MODES.search ? [pit, endl] : G.mode === 'search' ? [srch, pit, endl] : G.mode === 'endless' ? [endl, pit, srch] : [pit, endl, srch];
+    const whole = '<h3>Один стог</h3>' + row('search', 'Весь стог — одна яма: снимай любые открытые ±1, колода бесконечная, проигрыша нет. Разбирай до конца — прогресс сохраняется, можно вернуться в любой момент.');
+    const order = !CFG.MODES.campaign && !CFG.MODES.search ? [pit, endl, whole] : G.mode === 'search' ? [srch, pit, endl] : G.mode === 'endless' ? [endl, pit, srch] : [pit, endl, srch];
     show(`<h2>Как играть</h2><div class="help">${order.join('')}</div>
       <div class="foot"><button class="btn primary wide" data-act="${G.st && G.phase !== 'idle' ? 'resume' : 'menu'}">Понятно</button></div>`);
   }
@@ -3762,7 +3822,14 @@ function goto(screen){
       <p>В куче ${searchSpec(G.save.search.k).N.toLocaleString('ru-RU')} карт один золотой туз. Снимай любые открытые ±1, колода бесконечная. Золотая пыль — туз рядом.</p>
       <button class="btn primary wide" data-act="search-go">Искать</button>
       <button class="btn quiet wide" data-act="menu">Назад</button>`);
-  if (screen === 'search-win'){
+  if (screen === 'search-win' && G.srch && G.srch.whole){
+    const sv = G.save.whole, Z = G.srch, ms = sv.lastMs || 0;
+    show(`${trophyHtml(false)}<h2>Стог разобран!</h2><p>Все ${Z.P.N.toLocaleString('ru-RU')} карт сняты</p>
+      <div class="stats">${statHtml(fmtClock(ms), 'время', `data-to="${ms}" data-fmt="clock"`)}${statHtml(Z.taps - Z.draws, 'снято')}${statHtml(Z.draws, plural(Z.draws, 'добор', 'добора', 'доборов'))}</div>
+      <div class="row"><button class="btn primary" data-act="whole">Новый стог</button><button class="btn" data-act="menu">Меню</button></div>`);
+    finalOpen();
+  }
+  else if (screen === 'search-win'){
     const sv = G.save.search, Z = G.srch, ms = sv.lastMs || 0, taps = sv.lastTaps || 0;
     show(`${trophyHtml(false)}<h2>Туз найден!</h2><p>Снято ${Z.removed} ${plural(Z.removed, 'карта', 'карты', 'карт')} из ${Z.P.N.toLocaleString('ru-RU')}</p>
       <div class="stats">${statHtml(fmtClock(ms), 'время', `data-to="${ms}" data-fmt="clock"`)}${statHtml(taps, plural(taps, 'тап', 'тапа', 'тапов'))}${statHtml(fmtClock(sv.best[Z.k] || ms), 'лучшее')}</div>
@@ -3807,6 +3874,7 @@ $('card').addEventListener('click', (e) => {
   else if (act === 'endless'){ if (G.save.seen.endless || !CFG.MODES.campaign && !CFG.MODES.search) endlessSoon(); else goto('intro-endless'); }   // один режим — без экрана интро: учит первая яма   // первый вход — интро, между уровнями
   else if (act === 'endless-go'){ G.save.seen.endless = 1; save(); endlessSoon(); }
   else if (act === 'search'){ if (menuModel().srchLive) goto('game'); else if (G.save.seen.search) searchSoon(); else goto('intro-search'); }
+  else if (act === 'whole'){ if (G.mode === 'search' && G.srch && G.srch.whole && !G.srch.won) goto('game'); else searchSoon(0, true); }
   else if (act === 'search-go'){ G.save.seen.search = 1; save(); searchSoon(); }
   else if (act === 'search-next') searchSoon(G.save.search.k);
   else if (act === 'help') goto('help');
@@ -3837,12 +3905,12 @@ function resetProgress(){
   log('event', 'reset');
 }
 // вход в поиск: куча, которая ещё не строилась или не уложена, строится не в клике — сначала экран загрузки
-function searchSoon(k){
+function searchSoon(k, whole){
   if (G.busy) return;
-  const sp = SPILES[k === undefined ? G.save.search.k : k];
-  if (sp && S.layCache.has(sp.P)) return startSearch(k);
+  const sp = whole ? { P: wholePile() } : SPILES[k === undefined ? G.save.search.k : k];
+  if (sp && S.layCache.has(sp.P)) return startSearch(k, whole);
   G.busy = true; const el = $('loading'); el.textContent = 'Куча укладывается…'; el.className = 'busy'; log('event', 'search.loading');
-  setTimeout(() => { try { startSearch(k); } catch (err) { if (G.errors.length < 20) G.errors.push(String(err && err.stack || err)); console.error(err); }   // таймер — мимо safeTick: ошибку — в G.errors сами
+  setTimeout(() => { try { startSearch(k, whole); } catch (err) { if (G.errors.length < 20) G.errors.push(String(err && err.stack || err)); console.error(err); }   // таймер — мимо safeTick: ошибку — в G.errors сами
     finally { G.busy = false; el.className = 'hide'; } }, CFG.FX.LOAD_DEFER_MS);
 }
 function routeHash(h){
@@ -3882,7 +3950,7 @@ function coinHud(){ const v = String(G.coinsShown), el = $('hud-coins'); if (el.
 function coinBump(){ if (PILL && PILL.animate) PILL.animate([{ transform: 'scale(1.12)' }, { transform: 'scale(1)' }], 160); }
 function hud(){
   coinHud();
-  if (G.mode === 'search' && G.srch){ const Z = G.srch; $('hud-title').textContent = 'Куча ' + (Z.k + 1) + ' · ' + Z.P.N.toLocaleString('ru-RU') + ' карт'; $('hud-sub').textContent = 'снято ' + Z.removed + ' ' + plural(Z.removed, 'карта', 'карты', 'карт'); $('mute-wave').style.display = G.save.muted ? 'none' : ''; $('mute-x').style.display = G.save.muted ? '' : 'none'; return; }
+  if (G.mode === 'search' && G.srch){ const Z = G.srch; $('hud-title').textContent = Z.whole ? 'Один стог' : 'Куча ' + (Z.k + 1) + ' · ' + Z.P.N.toLocaleString('ru-RU') + ' карт'; $('hud-sub').textContent = 'снято ' + Z.removed.toLocaleString('ru-RU') + ' ' + plural(Z.removed, 'карта', 'карты', 'карт'); $('mute-wave').style.display = G.save.muted ? 'none' : ''; $('mute-x').style.display = G.save.muted ? '' : 'none'; return; }
   const endless = G.mode === 'endless' && G.run;
   $('hud-title').textContent = endless ? 'Куча ' + (G.run.k + 1) : G.L && G.screen !== 'menu' ? 'Яма ' + (G.li + 1) + ' из ' + LEVELS.length : 'Стог';
   if (G.aliveNow){ const n = cardsLeft(); $('hud-sub').textContent = endless ? endlessLeft().toLocaleString('ru-RU') + ' карт · ' + G.run.aces + ' ' + plural(G.run.aces, 'туз', 'туза', 'тузов') : 'в стоге ' + n.toLocaleString('ru-RU') + ' ' + plural(n, 'карта', 'карты', 'карт'); }
@@ -4003,7 +4071,11 @@ function searchTapAt(p){
   if (pxuNow() < 34){                           // издалека карты не читаются — тап приближает туда, куда показали
     const P = SP(); if (hit >= 0){ if (G.sfocusTw){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); } G.sfocus = { x: P.x[hit], z: P.y[hit] }; } G.szTo = 0.08; log('input', 'search.zoom'); return;
   }
-  if (hit < 0) return;
+  if (hit >= 0) searchHit(hit);
+}
+// тап по карте hit поиска / «Одного стога» (вблизи): закрыта — кто держит; не подходит — отказ; подходит — снять
+function searchHit(hit){
+  const Z = G.srch;
   if (Z.cover[hit] > 0){                        // закрыта: кто держит
     G.lv.closed++; const holders = Z.P.above[hit].filter(j => Z.alive[j]);
     addFx({ kind: 'hold', quad: cardQuad(hit), quads: nearQuads(cardQuad(hit), holders.map(j => cardQuad(j)), CFG.FX.HOLD_SEARCH_MAX), dur: CFG.HOLD_HINT_MS, info: 'holders=' + holders.length }); Audio.peek(); buzz('closed');
@@ -4013,6 +4085,7 @@ function searchTapAt(p){
   const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold]; G.preWinTop = prev; const r = searchTap(Z, hit);
   if (!r.ok) return;                            // 'gone' приходит без opened
   if (r.gold) return searchWin(quad);
+  if (r.done) return wholeWin(quad);
   flyFx(Z.face[hit], quad, prev, Z.streak);
   const t = now(), P = Z.P;                     // открывшиеся — волной от снятой карты, ближняя первой
   r.opened.filter(j => j !== Z.gold).sort((a, b) => Math.hypot(P.x[a] - P.x[hit], P.y[a] - P.y[hit]) - Math.hypot(P.x[b] - P.x[hit], P.y[b] - P.y[hit]))
@@ -4036,13 +4109,42 @@ function searchTapAt(p){
   }
   if (Z.streak >= CFG.COIN_STREAK_FROM) coins(1, curGeo().x, curGeo().y - 40, 'серия');
   Audio.play(Z.streak); Audio.land(1, CFG.FLY_MS / 1000); buzz(r.opened.includes(Z.gold) ? 'aceOpen' : streakMile(Z.streak) ? 'milestone' : 'move'); G.lv.moves++;
+  if (Z.whole) wholeAfterTap(t);
   refreshData(); hud(); searchSave(false);
+}
+// «Один стог»: открытые карты в кадре (над панелью, под шапкой)
+function wholeInView(){
+  const Z = G.srch, out = [], y0 = safeT + HEADER_H, y1 = trayTop() * scale;
+  for (let i = 0; i < Z.P.N; i++) if (Z.alive[i] && !Z.cover[i]){ const c = cardCenter(i); if (c.z <= 1 && c.x >= 0 && c.x <= S.cssW && c.y >= y0 && c.y <= y1) out.push(i); }
+  return out;
+}
+// после снятия: веха каждые WHOLE.MILE стога; в кадре не осталось открытых — камера едет к ближайшей открытой
+function wholeAfterTap(t){
+  const Z = G.srch, P = Z.P, W = CFG.WHOLE, m = Math.floor(Z.removed / P.N / W.MILE);
+  if (m > G.wholeMile){ G.wholeMile = m; const pct = Math.round(m * W.MILE * 100);
+    coins(W.MILE_COINS, VW / 2, H * 0.32, 'разобрано ' + pct + '%', { rain: true }); Audio.rise(); tip('Разобрано ' + pct + '% стога', 3000); log('event', 'whole.mile', pct + '%'); }
+  if (pxuNow() < 34 || wholeInView().length) return;
+  const f = G.sfocus; let b = -1, bd = 1e9;
+  for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i]){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.z); if (d < bd){ bd = d; b = i; } }
+  if (b < 0) return;
+  G.sfocusTw = { from: { ...f }, to: { x: P.x[b], z: P.y[b] }, t0: t + 300, ms: REDUCED ? 1 : CFG.FX.SEARCH_FIND_MS }; log('fx.start', 'cam.sfocus', 'whole.next');
+}
+function wholeWin(quad){
+  const Z = G.srch, t = now(), sv = G.save.whole; G.phase = 'won'; G.phaseUntil = t + CFG.FX.SEARCH_WIN_MS;
+  if (G.sfocusTw){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); }
+  G.szTo = 1; aceTaken(quad, t); confetti(sv.runs * 7 + 3, t + CFG.FX.FREEZE_MS, 2400);
+  coins(CFG.WHOLE.COIN_DONE, VW / 2, H * 0.32, 'стог разобран', { rain: true, t0: t + CFG.FX.FREEZE_MS });
+  const ms = Math.round(G.srchElapsed); sv.lastMs = ms; sv.lastTaps = Z.taps; sv.lastDraws = Z.draws; sv.wins = (sv.wins || 0) + 1;
+  if (!sv.best || ms < sv.best) sv.best = ms;
+  sv.seed = 0; sv.removed = []; sv.elapsed = 0; sv.taps = 0; sv.draws = 0; save();
+  refreshData(); hud();
+  log('event', 'whole.win', 'ms=' + ms + ' taps=' + Z.taps + ' draws=' + Z.draws);
 }
 function heatNow(t){ return G.heatVal * Math.exp(-(t - G.heatAt) / 9000); }
 function heatLevel(h){ return h > 0.7 ? 3 : h > 0.4 ? 2 : h > 0.08 ? 1 : 0; }   // ступени слов таблички: тепло / теплее / горячо
 function searchDeck(){
   const Z = G.srch; if (!Z || Z.won) return;
-  const prev = Z.top, s0 = Z.streak, o = -1.2 * (deckLayers(0, true) - 1); searchDraw(Z); G.lv.draws++; deckPress();
+  const prev = Z.top, s0 = Z.streak, o = -1.2 * (deckLayers(0, true) - 1); searchDraw(Z, Z.whole ? wholeInView() : null); G.lv.draws++; deckPress();
   const d = deckGeo(); addFx({ kind: 'deal', id: Z.top, prev, x0: d.x + o, y0: d.y + o, dur: CFG.DEAL_MS });
   if (s0 >= 3) Audio.streakBreak();
   Audio.draw(); Audio.land(0.7, CFG.DEAL_MS / 1000); buzz('deal'); hud(); searchSave(false);
@@ -4066,28 +4168,31 @@ function searchWin(quad){
 function searchSave(force){
   const Z = G.srch; if (!Z || Z.won) return;
   if (!force && ++G.srchSaveN % 6) return;
-  const sv = G.save.search, rem = []; for (let i = 0; i < Z.P.N; i++) if (!Z.alive[i]) rem.push(i);
+  const sv = Z.whole ? G.save.whole : G.save.search, rem = []; for (let i = 0; i < Z.P.N; i++) if (!Z.alive[i]) rem.push(i);
   Object.assign(sv, { k: Z.k, seed: Z.seed, removed: rem, top: Z.top, taps: Z.taps, draws: Z.draws, elapsed: Math.round(G.srchElapsed) }); save();
 }
-function startSearch(k){
-  leaveMode('search');
-  const sv = G.save.search; k = k === undefined ? sv.k : k;
-  const pk = searchPile(k); setScenePile(pk.P);
+// whole — «Один стог»: та же механика без туза, своя ячейка сейва, стог бесконечного режима
+function startSearch(k, whole){
+  leaveMode(whole ? 'whole' : 'search');
+  const sv = whole ? G.save.whole : G.save.search; k = whole ? 0 : k === undefined ? sv.k : k;
+  const P = whole ? wholePile() : searchPile(k).P; setScenePile(P);
+  const mk = (seed) => whole ? wholeStart(seed) : searchStart(k, seed);
   let Z;
-  if (sv.k === k && sv.removed && sv.removed.length && sv.seed){        // продолжить: снятое — снова снято (без проверки рангов)
-    Z = searchStart(k, sv.seed); Z.seed = sv.seed;
+  if ((whole || sv.k === k) && sv.removed && sv.removed.length && sv.seed){        // продолжить: снятое — снова снято (без проверки рангов)
+    Z = mk(sv.seed); Z.seed = sv.seed;
     for (const i of sv.removed){ if (!Z.alive[i]) continue; Z.alive[i] = 0; Z.removed++; for (const j of Z.P.below[i]) if (Z.alive[j]) Z.cover[j]--; }
-    Z.top = sv.top; Z.taps = sv.taps || 0; Z.draws = sv.draws || 0; Z.found = Z.alive[Z.gold] && !Z.cover[Z.gold]; G.srchElapsed = sv.elapsed || 0;
+    Z.top = sv.top; Z.taps = sv.taps || 0; Z.draws = sv.draws || 0; Z.found = Z.gold >= 0 && Z.alive[Z.gold] && !Z.cover[Z.gold]; G.srchElapsed = sv.elapsed || 0;
   } else {
-    sv.runs = (sv.runs || 0) + 1; const seed = 5000 + k * 101 + sv.runs; Z = searchStart(k, seed); Z.seed = seed; sv.k = k; sv.seed = seed; sv.removed = []; G.srchElapsed = 0;
+    sv.runs = (sv.runs || 0) + 1; const seed = whole ? 9000 + sv.runs : 5000 + k * 101 + sv.runs; Z = mk(seed); Z.seed = seed; sv.k = k; sv.seed = seed; sv.removed = []; G.srchElapsed = 0;
   }
+  G.wholeMile = whole ? Math.floor(Z.removed / P.N / CFG.WHOLE.MILE) : 0; G.pileH = 1;   // стог поиска — во весь рост: оседает по-настоящему, снятыми картами
   G.mode = 'search'; G.srch = Z; G.run = null; G.li = -1; G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; dropFx(); trayReset(); G.lv = newLevelMetrics(-1);
   G.glintCov = null; G.glintSeenAt = G.glintStepAt = -1e9; G.srchNearAt = 0;
   G.aliveNow = Z.alive; clearAnims(); refreshData(); S.mesh.material.uniforms.uDim.value = 0; S.mesh.material.uniforms.uFaceRot.value = 0; S.faceRot = 0;
   G.sz = G.szTo = Z.removed ? 0.3 : 1; G.sfocus = { x: 0, z: 0 }; G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
   G.phase = 'play'; goto('game'); save();
-  tip(Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
-  hud(); log('event', 'search.start', 'pile=' + (k + 1) + ' n=' + pk.P.N + ' cone=' + pk.cone + ' resumed=' + !!Z.removed);
+  tip(whole ? (Z.removed ? 'Продолжаем стог' : 'Весь стог — одна яма. Тапни — ближе') : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
+  hud(); log('event', whole ? 'whole.start' : 'search.start', 'pile=' + (k + 1) + ' n=' + P.N + ' resumed=' + !!Z.removed);
 }
 function fmtClock(ms){ const s0 = Math.floor(ms / 1000); return Math.floor(s0 / 60) + ':' + String(s0 % 60).padStart(2, '0'); }
 function nodeCover(i){ if (G.covFor === G.aliveNow && !G.covDirty) return G.covNow[i] > 0 ? 1 : 0; const P = SP(); for (const j of P.above[i]) if (G.aliveNow[j]) return 1; return 0; }
@@ -4311,6 +4416,16 @@ window.STOG = {
   ability(id){ useAbility(id); return { charges: G.save.endless.charges, wild: G.wildArmed, top: G.st && G.st.top, stock0: G.st && G.st.stock[0] }; },   // способность джокера (как тап по кнопке)
   charges(o){ G.save.endless.charges = { ...o }; save(); return G.save.endless.charges; },   // хуки — без интро (qa/shots.mjs снимает режимы после localStorage.clear)
   search(k){ G.save.seen.search = 1; save(); startSearch(k); return this.sstate(); },
+  wbot(){                                          // «Один стог»: один ход бота — открытая ±1 ближе к точке взгляда, иначе колода
+    const Z = G.srch; if (!Z || !Z.whole || Z.won || G.phase !== 'play') return null;
+    const pl = searchPlayable(Z); if (!pl.length){ searchDeck(); return 'deck'; }
+    const P = Z.P, f = G.sfocus; let b = pl[0], bd = 1e9; for (const i of pl){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.z); if (d < bd){ bd = d; b = i; } }
+    G.sfocus = { x: P.x[b], z: P.y[b] }; if (G.szTo > 0.3) G.szTo = 0.1; searchHit(b); return b; },
+  whole(frac){                                     // «Один стог»; frac — снять столько стога слоями сверху (без рангов), чтобы снять кадры середины и конца
+    startSearch(0, true); const Z = G.srch, P = Z.P;
+    while (frac && Z.removed < frac * P.N){ const open = []; for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i]) open.push(i);
+      for (const i of open){ if (Z.removed >= frac * P.N) break; Z.alive[i] = 0; Z.removed++; for (const j of P.below[i]) if (Z.alive[j]) Z.cover[j]--; } }
+    G.wholeMile = Math.floor(Z.removed / P.N / CFG.WHOLE.MILE); refreshData(); hud(); searchSave(true); return this.sstate(); },
   szoom(z){ if (G.srch){ G.szTo = G.sz = z; } return z; },   // поиск: зум (0 — карта ~72 px, 1 — вся куча)
   sstate(){ const Z = G.srch; return Z ? { pile: Z.k + 1, n: Z.P.N, removed: Z.removed, taps: Z.taps, onGold: Z.cover[Z.gold], found: Z.found, won: Z.won, sz: +G.sz.toFixed(2), ys: +S.ys.toFixed(2), pxu: Math.round(pxuNow()), heat: +heatNow(now()).toFixed(2), ms: Math.round(G.srchElapsed), phase: G.phase, screen: G.screen } : null; },
   sbot(){ const Z = G.srch; if (!Z || Z.won) return null; if (Z.found){ G.preWinTop = Z.top; searchTap(Z, Z.gold); searchWin(cardQuad(Z.gold)); return 'gold'; }
