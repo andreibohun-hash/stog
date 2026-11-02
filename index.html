@@ -382,6 +382,9 @@ const CFG = {
   PIT_PITCH_SPAN: 0.16,   // и по наклону
   OVER_PITCH: 0.62,       // наклон камеры на общем плане, рад
   OVER_YSCALE: 2.6,       // на общем плане стог вытянут по высоте во столько раз — силуэт стога…
+  OVER_TOP_PX: 90,        // «Один стог», общий план: верхушка не выше чем на столько px ниже шапки (место искре и подписи), низ — не ниже OVER_BOT_PX над
+  OVER_BOT_PX: 36,        // низом кадра, края — в OVER_SIDE_PX от боков; дистанция подбирается по габаритам стога (wholeOverPose), не фиксированная
+  OVER_SIDE_PX: 12,
   OVER_H_MAX: 1.75,       // …но не выше стольких ширин следа (Андрей 03.11: стог на 1 000 при ×2,6 — узкая колонна, высота 3 ширины). Высота стога
                           // в мире ~7,8 при любом N (слои), ширина — 6,7 на 1 000 / 11,7 на 3 000: 1,75 даёт ×1,5 на 1 000 и ×2,6 (прежнее) на 3 000
   PIT_YSCALE: 0.25,       // в яме высоты сплющены: при утрированной толщине слоя карта на 10–16 слоёв выше съезжала под 55° (Андрей 01.11 — объём: 0,15 → 0,25, кадры 0,15/0,25/0,35 без съезда)
@@ -1620,7 +1623,7 @@ const G = {
   wholeTut: 0, wholeMile: 0,   // «Один стог»: идёт урок первых ходов; последняя отмеченная веха (каждые WHOLE.MILE)
   abilityPop: {},          // кнопки способностей: когда появилась (пружинка) — по id джокера
   glReady: false,          // шейдеры собраны (boot): до этого кадр GL не рисуется, меню уже показано
-  chainZoomK: 1, heatK: 0, heatPt: { x: 0, z: 0 }, labelSparkAt: -1e9, chainBreakAt: -1e9, hS: null, sfocusV: null, melt: null, meltPending: null, wholeH: 1,   // hS — сглаженная высота стога под точкой взгляда (searchCam)   // фил серии: наезд камеры, сила «стог горит» и его центр, искры подписи, момент срыва
+  chainZoomK: 1, heatK: 0, heatPt: { x: 0, z: 0 }, labelSparkAt: -1e9, chainBreakAt: -1e9, hS: null, sfocusV: null, melt: null, meltPending: null, wholeH: 1, overPose: null,   // hS — сглаженная высота стога под точкой взгляда (searchCam)   // фил серии: наезд камеры, сила «стог горит» и его центр, искры подписи, момент срыва
   pileIntro: null, pileMove: null, jokerWinAt: -1e9,   // кучи: табличка новой кучи { t0, k, N, left }; переезд к следующей { P, off, mesh, run, L }; взят джокер
 };
 
@@ -2736,11 +2739,30 @@ function searchCam(){
   const hRaw = heightAt(tx, tz); G.hS = G.hS === null ? hRaw : G.hS + (hRaw - G.hS) * (G.szK ?? 1) * 0.6;
   CAM.tx = tx; CAM.tz = tz; CAM.ty = G.hS * CAM.ys * (1 - k) + S.maxH * 0.3 * CAM.ys * k;
 }
+// общий план «Одного стога»: поза overPose, но дистанция и высота точки взгляда подобраны по габаритам стога (цилиндр радиуса P.rad
+// и высоты maxH·ys·pileH) виртуальной камерой: верхушка не выше OVER_TOP_PX под шапкой, подножие не ниже OVER_BOT_PX над низом кадра,
+// бока в OVER_SIDE_PX — как «кадр по открытым картам» в ямах, а не фиксированная дистанция
+function wholeOverPose(){
+  const P = SP(), o = overPose(P, S.maxH, 0), Hp = S.maxH * o.ys * Math.max(0.05, G.pileH), cam = _fitCam, vc = viewCenterY(0), FX = CFG;
+  cam.aspect = S.cssW / S.cssH; cam.fov = CFG.FOV; const cp = Math.cos(o.pitch), sp = Math.sin(o.pitch);
+  const R = P.rad * 1.6, pts = [[0, Hp, 0], [R, 0, 0], [-R, 0, 0], [0, 0, R], [0, 0, -R], [P.rad * 0.9, Hp * 0.5, P.rad * 0.9], [-P.rad * 0.9, Hp * 0.5, P.rad * 0.9], [0, Hp * 0.5, -P.rad * 0.9]];   // подол стога шире P.rad (σ = rad/1,6): низ — по 1,6 rad
+  const proj = (ty, dist) => { cam.position.set(0, ty + dist * sp, dist * cp); cam.lookAt(0, ty, 0); cam.setViewOffset(S.cssW, S.cssH, 0, S.cssH / 2 - vc, S.cssW, S.cssH); cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+    let top = 1e9, bot = -1e9, side = 0; for (const [x, y, z] of pts){ _fv.set(x, y, z).project(cam); const sx = Math.abs(_fv.x) * S.cssW / 2, sy = (1 - _fv.y) / 2 * S.cssH; top = Math.min(top, sy); bot = Math.max(bot, sy); side = Math.max(side, sx); } return { top, bot, side }; };
+  const topLim = safeT + HEADER_H + FX.OVER_TOP_PX, botLim = S.cssH - safeB - FX.OVER_BOT_PX, sideLim = S.cssW / 2 - FX.OVER_SIDE_PX;
+  let ty = Hp * 0.45, dist = o.dist;
+  for (let it = 0; it < 12; it++){                 // дистанция — наименьшая, при которой всё влезает; точка взгляда — чтобы стог стоял по центру между лимитами
+    let lo = o.dist * 0.25, hi = o.dist * 4;
+    for (let k = 0; k < 24; k++){ const m = (lo + hi) / 2, r = proj(ty, m); if (r.top >= topLim && r.bot <= botLim && r.side <= sideLim) hi = m; else lo = m; }
+    dist = hi; const r = proj(ty, dist), mid = (topLim + botLim) / 2, cur = (r.top + r.bot) / 2, dy = cur - mid; if (Math.abs(dy) < 1) break;
+    ty -= dy / (S.cssH / (2 * Math.tan(CFG.FOV * Math.PI / 360) * dist)) * 0.8;   // картинка ниже центра — смотреть ниже (точка взгляда вниз), мир ≈ px / (px на единицу)
+  }
+  return { ...o, ty, dist, kind: 'search' };
+}
 // камера «Одного стога»: два масштаба — игра (sz 0: плоский ковёр PLAY_YSCALE, наклон PLAY_PITCH, PLAY_PX на карту, точка взгляда
 // G.sfocus) и вся куча (sz 1: общий план overPose во весь рост с кратером); между ними — нырок (твин) или сглаживание sz.
 // Драг — прокрутка с инерцией (G.sfocusV) и резинкой на краях; высота в игре не зависит от оседания (ys ÷ pileH)
 function wholeCam(){
-  const P = SP(), W = CFG.WHOLE, over = overPose(P, S.maxH, 0), fovV = CFG.FOV * Math.PI / 180, dClose = S.cssH / (2 * Math.tan(fovV / 2) * W.PLAY_PX);
+  const P = SP(), W = CFG.WHOLE, over = G.overPose || (G.overPose = wholeOverPose()), fovV = CFG.FOV * Math.PI / 180, dClose = S.cssH / (2 * Math.tan(fovV / 2) * W.PLAY_PX);
   G.sz += (G.szTo - G.sz) * (G.szK ?? 1); const k = Math.max(0, Math.min(1, G.sz)), e = k * k * (3 - 2 * k), f = G.sfocus;
   const lim = P.rad * 1.1, r = Math.hypot(f.x, f.z);
   if (r > lim){ const pull = 1 - (1 - W.DRAG_RUBBER) ** ((G.fdt || 16.7) / 16.7); f.x += (f.x * lim / r - f.x) * pull; f.z += (f.z * lim / r - f.z) * pull; if (G.sfocusV){ G.sfocusV.x *= 0.5; G.sfocusV.z *= 0.5; } }   // резинка
@@ -2764,7 +2786,7 @@ function wholeMelt(t, pct, left){
   const W = CFG.WHOLE, Z = G.srch; G.phase = 'melt'; tip('');
   G.melt = { t0: t, pct, left, hFrom: G.pileH, hTo: wholeHFor(left, Z.P.N), puffed: false, down: 0 }; G.wholeH = G.melt.hTo;
   addFx({ kind: 'whole.melt', t0: t, dur: W.MELT_UP_MS + W.MELT_HOLD_MS + W.MELT_DOWN_MS, info: pct + '%' }); Audio.rise(); Audio.shrink(W.MELT_UP_MS / 1000);
-  const P = SP(), oh = overPose(P, S.maxH, 0); oh.kind = 'search';
+  G.overPose = null; const oh = wholeOverPose();   // поза — по габаритам стога после вехи (pileH уже hTo? нет — hFrom; кадр с запасом)
   tweenCam(oh, W.MELT_UP_MS, 'melt.up', () => { G.sz = G.szTo = 1; G.melt.holdAt = now(); }, { ys: ysOut(CAM.ys, oh.ys), ysTrack: true });
 }
 function heightAt(x, z){ const i = Math.floor((x + S.hfExt) / CFG.HF_RES), j = Math.floor((z + S.hfExt) / CFG.HF_RES); return (i < 0 || j < 0 || i >= S.hfG || j >= S.hfG) ? 0 : S.hf[j * S.hfG + i]; }
@@ -3981,7 +4003,7 @@ function drawWholeSpark(c, t){
   for (let j = 0; j < 6; j++){ const s = t / 1000 + j / 6, cyc = Math.floor(s), u = s - cyc, R = mulberry32(cyc * 6 + j + 1), h0 = 12 + R() * (ph - 70), dx = (R() - 0.5) * pw * 0.5, sz = 6 + 4 * R();
     c.globalAlpha = 0.9 * Math.sin(Math.PI * u) * sq; c.drawImage(STAR, x + dx - sz / 2, y - h0 - 40 * u - sz / 2, sz, sz); }
   c.restore(); glow(c, GLOW.warm, x, y, 1.4 * (14 + 10 * k) * sq, 0.9 * sq);
-  c.save(); c.globalAlpha = sq; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round'; outlined(c, Z.removed ? 'продолжаем здесь' : 'начинаем с верхушки', x, Math.max(safeT + HEADER_H + 14, y - ph - 16), '800 14px ' + FONT, PAL.cream, 4); c.restore();   // не под шапку
+  c.save(); c.globalAlpha = sq; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round'; const ly = y - ph - 16 >= safeT + HEADER_H + 14 ? y - ph - 16 : y + 30; outlined(c, Z.removed ? 'продолжаем здесь' : 'начинаем с верхушки', x, ly, '800 14px ' + FONT, PAL.cream, 4); c.restore();   // над искрой, а нет места — под ней
 }
 // веха «Одного стога»: над общим планом — «разобрано N%», осталось карт, полоса
 function drawMelt(c, t){
@@ -4745,7 +4767,7 @@ function searchTapAt(p){
   const Z = G.srch; if (!Z || Z.won) return;
   if (G.phase === 'over' && Z.whole){ log('input', 'tap.over'); wholeDive(); return; }   // тап на общем плане — нырок сразу
   if (G.phase !== 'play') return;
-  if (zoomAllHit(p)){ G.szTo = G.szTo >= 0.9 ? (Z.whole ? 0 : 0.12) : 1; G.zoomAllUsed = true; log('input', 'search.zoomall', 'sz=' + G.szTo); return; }   // «вся куча» и обратно — к той же точке
+  if (zoomAllHit(p)){ G.szTo = G.szTo >= 0.9 ? (Z.whole ? 0 : 0.12) : 1; G.zoomAllUsed = true; if (Z.whole && G.szTo === 1) G.overPose = null; log('input', 'search.zoomall', 'sz=' + G.szTo); return; }   // «вся куча» и обратно — к той же точке
   if (Z.whole && G.trayK > 0.5) for (const r of abilityRects()) if (inRect(p, r, 8)){ useAbility(r.J.id); return; }
   if (Z.whole && inRect(p, goldHome(), 10)){ Audio.ui(); log('input', 'gold.slot'); searchSave(true); goto('album'); return; }   // мини-карта золотой — альбом
   if (inTray(p)){ if (inRect(p, deckGeo(), 10)) searchDeck(); return; }
@@ -4947,7 +4969,7 @@ function startSearch(k, whole){
   G.glintCov = null; G.glintSeenAt = G.glintStepAt = -1e9; G.srchNearAt = 0;
   G.aliveNow = Z.alive; clearAnims(); refreshData(); perf('start.refresh', 'touchGraph+tones'); S.mesh.material.uniforms.uDim.value = 0; S.mesh.material.uniforms.uFaceRot.value = 0; S.faceRot = 0;
   G.sz = Z.removed ? 0.3 : 1; G.szTo = G.sz; G.sfocus = { x: 0, z: 0 }; G.sfocusV = null; G.melt = null; G.meltPending = null;
-  if (whole){ G.sz = G.szTo = 1; G.sfocus = { x: Z.front.x, z: Z.front.y }; G.wholeH = wholeHFor(P.N - Z.removed - (P.N - Z.removed) % Math.round(P.N * CFG.WHOLE.MILE), P.N); G.pileH = G.wholeH; }   // высота — по последней вехе   // общий план во весь рост (осевший по оставшимся), искра у фронта, нырок — wholeDive G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
+  if (whole){ G.overPose = null; G.sz = G.szTo = 1; G.sfocus = { x: Z.front.x, z: Z.front.y }; G.wholeH = wholeHFor(P.N - Z.removed - (P.N - Z.removed) % Math.round(P.N * CFG.WHOLE.MILE), P.N); G.pileH = G.wholeH; }   // высота — по последней вехе   // общий план во весь рост (осевший по оставшимся), искра у фронта, нырок — wholeDive G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
   G.phase = whole ? 'over' : 'play'; if (whole){ G.overAt = now(); G.phaseUntil = G.overAt + CFG.WHOLE.OVER_SHOW_MS; } goto('game'); save();
   G.wholeTut = whole && !G.save.seen.wholeTut && !Z.removed ? 1 : 0;   // урок на первых ходах (коротко: снимай ±1, держи серию)
   G.chainZoomK = 1; G.heatK = 0; G.heatPt = { x: 0, z: 0 }; G.chainBreakAt = -1e9; G.hS = null;
@@ -4985,6 +5007,7 @@ document.addEventListener('keydown', (e) => {          // дубли на кла
 // Размер: resize + orientationchange + периодический пересчёт (§2)
 // ---------------------------------------------------------------------------
 function fit(){
+  G.overPose = null;   // общий план «Одного стога» — заново по размеру кадра
   const r = $('game').getBoundingClientRect(); if (!r.width || !r.height) return;
   const fs = getComputedStyle($('frame'));
   safeT = parseFloat(fs.paddingTop) || 0; safeB = parseFloat(fs.paddingBottom) || 0;
