@@ -344,10 +344,13 @@ const CFG = {
     FLIP_DELAY_MS: 90,    //   открывшиеся после хода карты переворачиваются через столько после тапа…
     FLIP_STEP_MS: 70,     //   …волной от снятой карты: каждая следующая (дальше) — на столько позже
     SIGH_AMP: 0.35,       //   «стог вздыхает» после туза: карты в волне поднимаются на столько (высот карты), у туза
-    SHADOW_A: 0.34,       //   непрозрачность контактных теней карт ямы (видно, какая карта лежит сверху)
+    SHADOW_A: 0.42,       //   непрозрачность контактных теней карт ямы (видно, какая карта лежит сверху; 02.11 — 0,34 → 0,42; 0,5 со сдвигом 0,09
+                          //   уже затемняли открытые карты рядом с картами повыше — открытая должна оставаться яркой)
     SHADOW_OFF: 0.06,     //   тень сдвинута от света на столько (высот карты; на экране — вправо-вниз)…
     SHADOW_DROP: 0.45,    //   …и на столько слоёв (THICK) ниже карты
     SHADOW_MAX: 96,       //   теней не больше стольких (InstancedMesh)
+    DEPTH_SHADE: [1, 0.72, 0.56, 0.44],   //   закрытая карта ямы под 1 / 2 / 3 / 4+ картами — такой тон (Андрей 02.11: «понятнее, какая карта на каком слое»)
+    LOCK_MAX: 3,          //   на закрытой карте с видимой серединой — число карт, что её держат (до стольких; больше — «3+»)
     SHADOW_REFILL_RAD: 0.05, // тени — заново, когда свет по горизонтали повернулся больше чем на столько, рад (драг, наклон, нырок)
     SHADOW_REFILL_MOVE: 0.8, // поиск: тени — заново, когда точка взгляда уехала дальше стольких (высот карты)
     SHADOW_NEAR_SZ: 0.35, //   поиск: тени есть ближе этого зума (G.sz)…
@@ -2056,7 +2059,7 @@ function refreshData(){
       const shut = on && st.cover[q] > 0; a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = (shut ? 0.95 : Math.max(0.95, shade)) + (on && st.cover[q] === 1 ? 4 : 0); a[o + 3] = shut ? 6 : 7; }
     else if (L && q >= 0 && on){
       const warm = L.goalMask[q] ? 2 : 0;
-      if (st.cover[q] > 0){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.62, shade) + warm + (st.cover[q] === 1 ? 4 : 0); a[o + 3] = 2; }   // +4 — «почти открыта»
+      if (st.cover[q] > 0){ const D = CFG.FX.DEPTH_SHADE; a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = D[Math.min(D.length, st.cover[q]) - 1] + warm + (st.cover[q] === 1 ? 4 : 0); a[o + 3] = 2; }   // тон — по слою (сколько карт ямы сверху); +4 — «почти открыта»
       else { const id = st.tab[q]; a[o] = id; a[o + 1] = CELL_FAR0 + id; a[o + 2] = 1 + warm; a[o + 3] = 3; }
     }
     else if (!cov && !S.open0[i]){ a[o] = S.face[i]; a[o + 1] = CELL_FAR0 + S.face[i]; a[o + 2] = 0.9; a[o + 3] = 5; }   // открылась под снятыми — «земля» (лицо в тёмном тоне, шаг 5 FS)
@@ -2378,6 +2381,21 @@ function assistNode(px, py, radius){
 }
 // рука показывает только видимую цель (word-cube): первая из кандидатов, у которой центр не закрыт и в кадре
 function pickVisibleTarget(cands, isVisible){ for (const i of cands) if (isVisible(i)) return i; return -1; }
+// сколько держит: на закрытых картах ямы, у которых середина на виду (её не накрывает другая карта), — кружок с числом карт ямы
+// сверху (до LOCK_MAX, дальше «3+»): видно и то, что держит лишь краешком
+function drawLocks(c, t){
+  if (!G.pitOn || !G.L || !G.st || (G.phase !== 'play' && G.phase !== 'stuck') || camTw) return;
+  const L = G.L, st = G.st, FX = CFG.FX, a = Math.min(1, (t - (G.lastMoveAt || 0)) / 250);
+  c.save(); c.textAlign = 'center'; c.textBaseline = 'middle'; c.font = '900 11px ' + FONT;
+  for (let q = 0; q < L.n; q++){
+    if (!st.present[q] || !st.cover[q] || q === L.goldIdx) continue;
+    const i = L.nodes[q], p = cardCenter(i); if (pickCard(p.x, p.y) !== i) continue;
+    const x = p.x / scale, y = p.y / scale, n = st.cover[q]; if (y > curGeo().top - 10 || y < safeT / scale + HEADER_H + 8) continue;   // под панелью и шапкой — не рисуем
+    c.globalAlpha = a * 0.92; c.fillStyle = n === 1 ? 'rgba(235,245,255,.95)' : 'rgba(20,18,30,.78)'; c.beginPath(); c.arc(x, y, 9, 0, Math.PI * 2); c.fill();
+    c.fillStyle = n === 1 ? '#22304e' : '#fff7e6'; c.fillText(n > FX.LOCK_MAX ? FX.LOCK_MAX + '+' : String(n), x, y + 0.5);
+  }
+  c.restore();
+}
 function nodeVisible(q){
   const i = G.L.nodes[q], c = cardCenter(i);
   if (c.x < 8 || c.x > S.cssW - 8 || c.y < safeT + HEADER_H || c.y > S.cssH - (safeB + TRAY_H * scale)) return false;
@@ -2773,7 +2791,7 @@ function playNode(q, how){
   if (st.streak >= CFG.COIN_STREAK_FROM) coins(1, curGeo().x, curGeo().y - 40, 'серия');
   if (q !== L.goldIdx){ Audio.play(st.streak); Audio.land(1, CFG.FLY_MS / 1000); buzz(aceOpen ? 'aceOpen' : streakMile(st.streak) ? 'milestone' : 'move'); }   // туз звучит и дрожит во взятии (aceTaken)
   log('input', 'tap.card', 'card=' + RANKS[rk(st.tab[q])] + ' warm=' + L.goalMask[q] + ' how=' + how + ' streak=' + st.streak);
-  refreshData(); hud();
+  refreshData(); hud(); G.lastMoveAt = now();   // кружки «сколько держит» — заново с ходом
   if (isWin(st)) winSeq(quad); else { checkStuck(); reframe(); }
   return true;
 }
@@ -3545,6 +3563,7 @@ function renderUI(t){
   if (G.trayK > 0.01 && ((G.L && G.st) || (G.mode === 'search' && G.srch))) drawTray(c, t);
   drawFx(c, t);
   drawParticles(c, t);
+  drawLocks(c, t);
   if (G.shrink) drawShrink(c, t);
   if (G.pileIntro) drawPileIntro(c, t);
   if (G.mode === 'endless'){ drawJokerWin(c, t); drawHalfWin(c, t); if (G.pileMove) drawPileNext(c, t); if (G.screen === 'game'){ drawJokerSlot(c, t); drawAbilities(c, t); } }
