@@ -275,9 +275,10 @@ const CFG = {
                           // Механика поиска без туза: любые открытые ±1, колода бесконечная. Калибровка — `node sim.mjs whole`
     N: 3000,              //   карт в стоге (Андрей 02.11: 10 000 — ~4,5 ч, много); 10 000 — стог бесконечного, иначе свой граф тем же генератором
     HELP: 0.6,            //   колода: в кадре ни одна открытая не подходит к новой карте — с этой вероятностью подходит к одной из них
-    ZONE0: 1.6,           //   яма растёт (Андрей 02.11: «чтобы не было так много открытых»): на старте — карты в этом радиусе от верхушки,
-    GROW: 1.1,            //   снятая карта берёт в яму карты в этом радиусе; открытые вне ямы лежат рубашкой и не снимаются
-    OUT_DIM: 0.5,         //   яркость карт вне ямы (в яме закрытые — 1 − 0,04 на карту сверху)
+    ZONE0: 2.8,           //   яма растёт (Андрей 02.11: «чтобы не было так много открытых»): на старте — карты в этом радиусе от верхушки,
+    GROW: 1.2,            //   снятая карта берёт в яму карты в этом радиусе (1,1 — 2–5 открытых, мало: Андрей 02.11); вне ямы не снимаются
+    OUT_DIM: 0.5,         //   яркость закрытых вне ямы (в яме закрытые — 1 − 0,04 на карту сверху)
+    OUT_FACE: 0.4,        //   открытые вне ямы — лицом, но тёмные (как вне ямы в бесконечном): видно, что свободна, но не в яме
     MILE: 0.1,            //   праздник каждые столько стога: монеты и строка «разобрано N%»
     MILE_COINS: 10,
     COIN_DONE: 200,       //   монет за разобранный стог
@@ -2151,7 +2152,8 @@ function refreshSearch(){
     if (!Z.alive[i]){ a[o + 3] = -1; continue; }
     const cov = Z.cover[i];
     if (i === Z.gold){ a[o] = CELL_GOLD; a[o + 1] = CELL_GOLD_FAR; a[o + 2] = cov ? 0.85 : 1; a[o + 3] = 7; }
-    else if (Z.zone && !Z.zone[i]){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = CFG.WHOLE.OUT_DIM; a[o + 3] = 2; }   // «Один стог»: вне ямы — рубашкой и темнее, яма читается светлым пятном
+    else if (Z.zone && !Z.zone[i]){ const id = Z.face[i];   // «Один стог»: вне ямы — темнее (открытые — лицом), яма читается светлым пятном
+      if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = CFG.WHOLE.OUT_DIM; a[o + 3] = 2; } else { a[o] = id; a[o + 1] = CELL_FAR0 + id; a[o + 2] = CFG.WHOLE.OUT_FACE; a[o + 3] = 3; } }
     else if (cov){ a[o] = CELL_BACK; a[o + 1] = CELL_BACK_FAR; a[o + 2] = Math.max(0.55, (Z.zone ? 1 : 0.9) - 0.04 * cov); a[o + 3] = 2; }
     else { const id = Z.face[i]; a[o] = id; a[o + 1] = CELL_FAR0 + id; a[o + 2] = 1; a[o + 3] = 3; }
   }
@@ -4104,7 +4106,7 @@ function searchHit(hit){
     addFx({ kind: 'hold', quad: cardQuad(hit), quads: nearQuads(cardQuad(hit), holders.map(j => cardQuad(j)), CFG.FX.HOLD_SEARCH_MAX), dur: CFG.HOLD_HINT_MS, info: 'holders=' + holders.length }); Audio.peek(); buzz('closed');
     tipOnce('hold', 'Её держат обведённые карты — сними их', CFG.FX.TIP_HOLD_MS); return;
   }
-  if (Z.zone && !Z.zone[hit]){ deny(hit); Audio.peek(); buzz('closed'); tipOnce('far', 'Яма растёт от снятых карт — снимай у её края', CFG.FX.TIP_HOLD_MS); log('input', 'whole.far'); return; }
+  if (Z.zone && !Z.zone[hit]){ deny(hit); Audio.peek(); buzz('closed'); tipOnce('far', 'Тёмная — за краем ямы. Яма растёт от снятых карт', CFG.FX.TIP_HOLD_MS); log('input', 'whole.far'); return; }
   if (hit !== Z.gold && !ok(rk(Z.top), rk(Z.face[hit]))){ G.lv.wrong++; deny(hit); denyHop(); Audio.wrong(); buzz('wrong'); return; }
   const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold]; G.preWinTop = prev; const r = searchTap(Z, hit);
   if (!r.ok) return;                            // 'gone' приходит без opened
