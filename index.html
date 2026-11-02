@@ -311,6 +311,9 @@ const CFG = {
     KEEP_TAPS: 3,         //   …и не раньше чем через столько тапов после входа (плейтест v34: «карты то открываются, то пропадают»).
                           //   Лицо, однажды показанное, не прячется: решённое лицо вне окна — лицом, но тёмным (OUT_FACE)
     START_CHAIN: 3,       //   на старте в окне ближе всего к центру — лесенка из стольких карт к верхней (ход есть всегда, серия 2–3)
+    ZONE_DEPTH: 3,        //   в яму входят карты окна не глубже стольких карт сверху (глубже — тёмные рубашки, как вне ямы: тон 0,5 против 0,55;
+                          //   тап по ним всё равно показывает, кто держит) и открытые, физически лежащие на карте ямы (замыкание вверх по графу
+                          //   касания — плейтест v35: яркая 4 вне окна лежала на карте ямы и не снималась; «яркая = играбельная»)
     OUT_DIM: 0.5,         //   яркость закрытых вне ямы
     OUT_FACE: 0.6,        //   открытые вне ямы — рубашкой посветлее: видно, что карта свободна, но не в яме (лицо решится, когда яма дорастёт)
     DEPTH_STEP: 0.04,     //   закрытые в яме: 1 − столько на каждую карту ямы сверху (логическое покрытие, порог OVERLAP_MIN)…
@@ -1428,7 +1431,7 @@ function zoneUpdate(S){
   for (const i of was) S.zone[i] = 0;
   const keep = (i, R) => { const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); return d <= R + W.CARD_HYST || (!S.cover[i] && S.openAt[i] >= 0 && tapN - S.openAt[i] < W.KEEP_TAPS); };
   const place = () => {
-    const f = S.front, cand = nearby(P, f.x, f.y, W.VIEW_R_MAX).filter(i => S.alive[i]).map(i => [i, Math.hypot(P.x[i] - f.x, P.y[i] - f.y)]).sort((a, b) => a[1] - b[1]);
+    const f = S.front, cand = nearby(P, f.x, f.y, W.VIEW_R_MAX).filter(i => S.alive[i] && S.cover[i] <= W.ZONE_DEPTH).map(i => [i, Math.hypot(P.x[i] - f.x, P.y[i] - f.y)]).sort((a, b) => a[1] - b[1]);
     const cnt = (R) => { let n = 0; for (const [i, d] of cand) if (d <= R && !S.cover[i]) n++; return n; };
     let R = S.viewR || W.VIEW_R, open = cnt(R);   // гистерезис: шире — пока открытых меньше цели; уже — пока их больше цели + OPEN_HYST
     while (open < W.OPEN_TARGET && R < W.VIEW_R_MAX){ R += W.VIEW_STEP; open = cnt(R); }
@@ -1442,7 +1445,16 @@ function zoneUpdate(S){
   S.viewR = z.R; const list = [], out = [], old = new Set(was), inList = new Set();
   for (const [i, d] of z.cand) if (d <= z.R){ S.zone[i] = 1; list.push(i); inList.add(i); }
   // гистерезис на карту: бывшая в окне остаётся, пока не дальше R + CARD_HYST, а открытая — не раньше KEEP_TAPS тапов после входа
-  for (const i of was){ if (inList.has(i) || !S.alive[i]) continue; if (keep(i, z.R)){ S.zone[i] = 1; list.push(i); inList.add(i); } else S.openAt[i] = -1; }
+  for (const i of was){ if (inList.has(i) || !S.alive[i] || S.cover[i] > W.ZONE_DEPTH) continue; if (keep(i, z.R)){ S.zone[i] = 1; list.push(i); inList.add(i); } else S.openAt[i] = -1; }
+  // замыкание вверх по физическому стеку (плейтест v35: яркая 4 вне окна лежала на карте ямы и не снималась): открытая карта,
+  // физически лежащая на карте ямы (граф касания без порога), — тоже в яме. Тон поднимается по тому же графу, так «яркая = играбельная».
+  // Закрытые сверху в яму не тянутся (полное замыкание раздувало яму до 22 открытых): они и так рубашкой, тап по ним — «кто держит»
+  // Закрытая карта входит в яму, только если весь её физический стек сверху лежит в R + CARD_HYST (иначе замыкание тянуло бы
+  // в яму далёкие карты — яма раздувалась до 22 открытых); остальные — тёмные рубашки, и то, что на них, тоже тёмное (тон идёт по графу)
+  const tA = touchGraph(P).tAbove, f = S.front, lim = z.R + W.CARD_HYST, stack = [];
+  const coneIn = (i) => { stack.length = 0; stack.push(i); const seen = new Set([i]); while (stack.length){ const c = stack.pop(); for (const j of tA[c]) if (S.alive[j] && !seen.has(j)){ if (Math.hypot(P.x[j] - f.x, P.y[j] - f.y) > lim) return false; seen.add(j); stack.push(j); } } return true; };
+  let w = 0; for (const i of list){ if (!S.cover[i] || coneIn(i)) list[w++] = i; else { S.zone[i] = 0; inList.delete(i); } } list.length = w;
+  for (let q = 0; q < list.length; q++) for (const j of tA[list[q]]) if (S.alive[j] && !inList.has(j)){ S.zone[j] = 1; list.push(j); inList.add(j); }   // замыкание вверх, рекурсивно
   for (const i of list){ if (!S.cover[i] && S.openAt[i] < 0){ S.openAt[i] = tapN; if (!old.has(i) || S.openAt[i] === tapN) out.push(i); } }   // открытой в окне стала сейчас — новая для игрока
   S.zoneList = list; return out;
 }
@@ -4649,7 +4661,7 @@ function searchHit(hit){
     addFx({ kind: 'hold', quad: cardQuad(hit), quads: nearQuads(cardQuad(hit), holders.map(j => cardQuad(j)), CFG.FX.HOLD_SEARCH_MAX), dur: CFG.HOLD_HINT_MS, info: 'holders=' + holders.length }); Audio.peek(); buzz('closed');
     tipOnce('hold', 'Её держат обведённые карты — сними их', CFG.FX.TIP_HOLD_MS); return;
   }
-  if (Z.zone && !Z.zone[hit]){ deny(hit); Audio.peek(); buzz('closed'); tipOnce('far', 'Тёмная — за краем ямы. Яма растёт от снятых карт', CFG.FX.TIP_HOLD_MS); log('input', 'whole.far'); return; }
+  if (Z.zone && !Z.zone[hit]){ deny(hit); Audio.peek(); buzz('closed'); tip('За краем ямы — играй ближе к снятым', CFG.FX.TIP_HOLD_MS); log('input', 'whole.far'); return; }   // причина — каждый раз, не tipOnce
   const how = Z.whole && G.wildArmed ? 'wild' : undefined;   // «любая карта» взведена: ранг не проверяется
   if (Z.whole ? !how && !wholeFits(Z, hit) : hit !== Z.gold && !ok(rk(Z.top), rk(Z.face[hit]))){ G.lv.wrong++; deny(hit); denyHop(); Audio.wrong(); buzz('wrong'); return; }
   const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold], id = faceId(Z, hit), face = Z.face[hit], prevGold = !!(Z.whole && Z.goldTop && !Z.streak && Z.goldId === prev); G.preWinTop = prev; const r = searchTap(Z, hit, how);
