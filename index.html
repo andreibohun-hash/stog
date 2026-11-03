@@ -152,7 +152,7 @@ table.res tr.tot td{border-bottom:0;color:var(--accent)}
 .intro svg{display:block;width:56px;height:56px;margin:2px auto 4px}
 .album{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin:4px 0 10px}
 .tabs{display:flex;gap:6px;justify-content:center;margin:0 0 8px}.tabs button{font:800 13px/1 Nunito,sans-serif;padding:8px 14px;border-radius:999px;border:1px solid rgba(255,207,90,.3);background:rgba(0,0,0,.25);color:var(--muted)}.tabs button.on{background:rgba(255,207,90,.22);color:#fff3c4}
-.achgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 6px;margin:4px 0 10px}.ach{text-align:center}.ach canvas{display:block;width:56px;height:56px;margin:0 auto 4px}.ach b{display:block;font-size:12px;color:#fff3c4}.ach small{display:block;font-size:10px;line-height:1.25;color:var(--muted)}.ach.lock b{color:var(--muted)}.ach .date{opacity:.7}
+.achgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 6px;margin:4px 0 10px}.ach{text-align:center}.ach canvas{display:block;width:56px;height:56px;margin:0 auto 4px}.ach b{display:block;font-size:14px;color:var(--gold-ink)}.ach small{display:block;font-size:10px;line-height:1.25;color:var(--muted)}.ach.lock b{color:var(--muted)}.ach .date{font-size:9px;opacity:.7}
 #btn-menu.bump{animation:bump .45s ease-out}@keyframes bump{0%{transform:scale(1)}40%{transform:scale(1.3)}100%{transform:scale(1)}}
 .alb canvas{display:block;width:44px;height:62px}
 .alb small{display:block;text-align:center;font-size:11px;font-weight:800;color:var(--muted);margin-top:2px}
@@ -1551,7 +1551,7 @@ const ACH = [
   { id: 'croupier', name: 'Крупье', cond: '500 снятых карт', test: (S, c) => (c.total || 0) >= 500 },
   { id: 'world', name: 'Кругосветка', cond: 'цепочка прошла все 13 рангов', test: (S) => new Set(S.hist.map(c => c.r)).size >= 13 },
   { id: 'zebra', name: 'Зебра', cond: '10 карт подряд с чередованием цвета', test: (S) => { const h = S.hist; if (h.length < 10) return false; for (let i = h.length - 9; i < h.length; i++) if (isRed(h[i].s) === isRed(h[i - 1].s)) return false; return true; } },
-  { id: 'mono', name: 'Монохром', cond: '8 карт подряд одного цвета', test: (S) => { const h = S.hist; return h.length >= 8 && h.slice(-8).every(c => isRed(c.s) === isRed(h[h.length - 1].s)); } },
+  { id: 'mono', name: 'Монохром', cond: '10 карт подряд одного цвета', test: (S) => { const h = S.hist; return h.length >= 10 && h.slice(-10).every(c => isRed(c.s) === isRed(h[h.length - 1].s)); } },   // v61: 8 → 10 (бот открывал на 12-м снятии)
   { id: 'swing', name: 'Качели', cond: '6 карт подряд со сменой направления на каждом шаге', test: (S) => { const h = S.hist; if (h.length < 6) return false; let prev = 0; for (let i = h.length - 5; i < h.length; i++){ const d = stepDir(h[i - 1].r, h[i].r); if (!d || d === prev) return false; prev = d; } return true; } },
   { id: 'self', name: 'Своими силами', cond: '30 снятий подряд без колоды', test: (S) => S.streak >= 30 },
   { id: 'marathon', name: 'Марафон', cond: 'серия 50', test: (S) => S.streak >= 50 },
