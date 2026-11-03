@@ -151,6 +151,9 @@ table.res tr.tot td{border-bottom:0;color:var(--accent)}
 .help canvas{display:block;width:44px;height:62px}
 .intro svg{display:block;width:56px;height:56px;margin:2px auto 4px}
 .album{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin:4px 0 10px}
+.tabs{display:flex;gap:6px;justify-content:center;margin:0 0 8px}.tabs button{font:800 13px/1 Nunito,sans-serif;padding:8px 14px;border-radius:999px;border:1px solid rgba(255,207,90,.3);background:rgba(0,0,0,.25);color:var(--muted)}.tabs button.on{background:rgba(255,207,90,.22);color:#fff3c4}
+.achgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 6px;margin:4px 0 10px}.ach{text-align:center}.ach canvas{display:block;width:56px;height:56px;margin:0 auto 4px}.ach b{display:block;font-size:12px;color:#fff3c4}.ach small{display:block;font-size:10px;line-height:1.25;color:var(--muted)}.ach.lock b{color:var(--muted)}.ach .date{opacity:.7}
+#btn-menu.bump{animation:bump .45s ease-out}@keyframes bump{0%{transform:scale(1)}40%{transform:scale(1.3)}100%{transform:scale(1)}}
 .alb canvas{display:block;width:44px;height:62px}
 .alb small{display:block;text-align:center;font-size:11px;font-weight:800;color:var(--muted);margin-top:2px}
 .card .foot{position:sticky;bottom:-16px;margin:0 -18px -16px;padding:10px 18px 16px;background:var(--panel)}
@@ -326,6 +329,9 @@ const CFG = {
     FLOOR: 10,            //   (v57, решение Андрея 03.11: «на экране всегда не меньше 8–10 лиц») при сбросе кольца N = FLOOR − лиц сейчас + требуемых
     PACK_N: [3, 6],       //   снятий, в этих пределах; лиц < URGENT_FACES на сбросе — срочное кольцо на 2 снятия
     URGENT_FACES: 6,
+    FAR_R: 9,             //   …дальние карты — не дальше стольких высот карты от фронта (на 3 000 иначе 76% лиц за кадром и прокрутка каждые 5 снятий)
+    FAR_MIN_D: 1.5,       //   (v59, Андрей: «открытые карты по всей куче — перемещаясь, искать нужную») пачка: тёплая карта у фронта, остальные —
+                          //   случайные непокрытые рубашки по всей куче, не ближе стольких высот карты друг к другу; стартовая пачка наполовину по куче
     MARK_TINT: [0.25, 0.7],   // (v58, Андрей: «усилить визуал следующих карт») тинт рубашки помеченных карт по доле заряда, пульс в такт кольцу, вспышка на снятие
     MARK_THREADS_FROM: 0.66,  //   с этой доли заряда — тусклые нити от кольца к помеченным картам (видно, куда полетит искра)
     CHARGE_N: [3, 5],     //   искра (v51, решение Андрея 03.11): кольцо заряда слева от отбоя; требуется случайно столько снятий с поля (добор не
@@ -541,6 +547,8 @@ const CFG = {
     SEARCH_WIN_ZOOM: 0.85,//   …и зум ×столько (наезд без tweenCam — его перебивает searchCam; точка едет твином G.sfocusTw за PUSH_MS)
     STREAK_POP_MS: 220,   //   дорожка серии: новый сегмент выдвигается (высота 1,7 → 1, easeOutBack) за столько…
     STREAK_GLOW_MS: 300,  //   …и вспыхивает свечением 6 → 16 за столько
+    ACH_MS: 1200,         //   секретная ачивка (v60): жетон по центру поля столько, затем летит в ☰ за ACH_FLY_MS
+    ACH_FLY_MS: 500,
     STREAK_BIG_FROM: 20,  //   «СЕРИЯ N» посреди поля — с этой серии и каждые +10 (рубеж 10 — на дорожке), держится STREAK_BIG_MS (v50)
     STREAK_BIG_MS: 900,
     TRACK_SHINE_MS: 1200, //   огонёк по дорожке серии: блик пробегает по заполненной части за столько мс (v50)
@@ -1382,13 +1390,14 @@ function wholeStart(seed, coll, plain, Nsize){
   const P = wholePile(Nsize), R = mulberry32(seed), N = P.N;
   const S = { k: 0, whole: true, seed, P, gold: -1, R, face: new Int16Array(N).fill(FACE_NONE), alive: new Uint8Array(N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)), zone: new Uint8Array(N),
     top: 0, streak: 0, best: 0, taps: 0, draws: 0, removed: 0, found: false, won: false, plain: !!plain, order: [],
-    goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0, charge: 0, chargeN: 0, packN: 0, sparks: 0, rescues: 0, packs: [], gaps: [], sinceSpark: 0, pending: false, pendRuns: [], pendAt: [], pendCur: 0 };   // charge/chargeN — кольцо искры (снятий), packN — карт в пачке (v56: раздельно на старте)
+    goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0, charge: 0, chargeN: 0, packN: 0, sparks: 0, rescues: 0, packs: [], gaps: [], sinceSpark: 0, pending: false, pendRuns: [], pendAt: [], pendCur: 0, hist: [], achDone: new Set(), lastPack: 0 };   // hist — цепочка {r, s} с последнего добора; achDone — открытые ачивки (v60)   // charge/chargeN — кольцо искры (снятий), packN — карт в пачке (v56: раздельно на старте)
   if (!plain) wholeSchedule(S, R);
   S.front = { x: 0, y: 0 }; const flip = zoneUpdate(S, undefined, undefined, plain ? CFG.WHOLE.START_CHAIN + 2 : CFG.WHOLE.START_FACES);   // старт: START_FACES ближайших к верхушке (v56: 8, было 5)
   // верхняя карта случайна; ближайшие к фронту — лесенка к ней (top ± 1, ± 2, ± 3: ход есть всегда, серия START_CHAIN; плейтест v34:
   // «старт без опции снять с поля»), остальные — случайные лица не ранга верхней
   S.top = Math.floor(R() * 52); const r0 = rk(S.top), dir = R() < 0.5 ? 1 : -1;
   const lad = plain ? [1, 2, 3].map(d => dir * d) : [dir, -dir, 2 * dir, 3 * dir];   // v56: лесенка в обе стороны от верхней (r0 ± 1, затем +2, +3 по знаку) — выбор ≥ 2 с первого хода
+  if (!plain){ const half = Math.floor(flip.length / 2), farS = wholeFarPick(S, flip.length - half, flip.slice(0, half)); flip.splice(half, flip.length - half, ...farS); }   // v59: стартовая пачка наполовину по куче
   flip.forEach((i, k) => { if (k < lad.length) S.face[i] = (r0 + 13 + lad[k]) % 13 + 13 * Math.floor(R() * 4); else { let f; do f = Math.floor(R() * 52); while (rk(f) === r0); S.face[i] = f; } S.zone[i] = 1; });
   S.goal = plain ? 1e9 : wholeGoal(S); zoneCount(S); wholeChargeReset(S); wholeBufUpdate(S);
   return S;
@@ -1458,6 +1467,7 @@ function wholeTap(S, i, how){
   else if (wholeIsPiece(f)){ const g = (f - FACE_PIECE0) / CFG.GOLD.PIECES | 0, GD = S.golds[g]; if (!free && !ok(rk(S.top), rk(GD.id))) return { ok: false, why: 'rank' };
     if (!sweep) S.streak++; GD.got++; res.piece = g; res.pieceN = GD.got; if (GD.got === CFG.GOLD.PIECES){ res.assembled = GD.id; S.coll.push(GD.id); } }   // текущая прежняя: кусочек не блокирует цепочку
   else { if (!free && !ok(rk(S.top), rk(f))) return { ok: false, why: 'rank' }; if (!sweep){ S.top = f; S.streak++; } }
+  if (!sweep && !wholeIsHalf(f)){ const cid = wholeIsPiece(f) ? S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].id : f; S.hist.push({ r: rk(cid), s: Math.floor(cid / 13) }); if (S.hist.length > 64) S.hist.shift(); }   // цепочка для ачивок (v60)
   if (S.streak > S.best) S.best = S.streak;
   S.alive[i] = 0; S.removed++; S.taps++; S.order.push(i);
   const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }   // освободившиеся лежат рубашкой — запас для искры
@@ -1473,26 +1483,37 @@ function wholeTap(S, i, how){
 // иначе ждёт (pending). Спасение: в яме нет хода — искра летит досрочно, переворачивает одну тёплую карту (±1) и кольцо сбрасывается.
 // → { faced, spark, rescue, pending }
 // запас искры: непокрытые рубашки в FLIP_R от фронта, ближние первыми (S.bufList, S.bufN) — то, что перевернёт искра; игра метит их искорками
-function wholeBufUpdate(S){ const P = S.P, fr = S.front, W = CFG.WHOLE, N = S.packN || 1; let r = W.FLIP_R, buf = [];
-  for (let k = 0; k < 6; k++){ buf = nearby(P, fr.x, fr.y, r).filter(j => S.alive[j] && !S.cover[j] && S.face[j] === FACE_NONE); if (buf.length >= N) break; r *= 1.6; }   // радиус расширяется (v57), пока не наберётся N
-  buf = buf.map(j => [j, Math.hypot(P.x[j] - fr.x, P.y[j] - fr.y)]).sort((a, b) => a[1] - b[1]).map(c => c[0]);
-  S.bufAll = buf.length; S.bufList = buf.slice(0, S.packN || buf.length); S.bufN = S.bufList.length; return buf; }   // пометки — только N = packN ближайших (v53)
+// случайные непокрытые рубашки по всей куче (v59): n штук, не ближе FAR_MIN_D друг к другу и к exclude; равномерно по живым непокрытым
+function wholeFarPick(S, n, exclude){ const P = S.P, W = CFG.WHOLE, fr = S.front, cand = []; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.face[i] === FACE_NONE && !(exclude && exclude.includes(i)) && Math.hypot(P.x[i] - fr.x, P.y[i] - fr.y) <= W.FAR_R) cand.push(i);
+  const out = []; for (let tries = 0; tries < cand.length * 3 && out.length < n && cand.length; tries++){ const j = cand[Math.floor(S.R() * cand.length)];
+    if (out.includes(j)) continue; let okD = true; for (const k of out) if (Math.hypot(P.x[j] - P.x[k], P.y[j] - P.y[k]) < W.FAR_MIN_D){ okD = false; break; }
+    if (okD && exclude) for (const k of exclude) if (Math.hypot(P.x[j] - P.x[k], P.y[j] - P.y[k]) < W.FAR_MIN_D){ okD = false; break; } if (okD) out.push(j); }
+  return out; }
+// запас искры (v59): первая — ближайшая к фронту непокрытая рубашка (тёплая карта), остальные N − 1 — выбранные при сбросе кольца по всей куче
+// (S.farPick); не хватило дальних — добираются ближние. S.bufList — что перевернёт искра (пометки), S.bufAll — сколько непокрытых рубашек всего
+function wholeBufUpdate(S){ const P = S.P, fr = S.front, N = S.packN || 1;
+  const far = (S.farPick || []).filter(j => S.alive[j] && !S.cover[j] && S.face[j] === FACE_NONE);
+  let all = []; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.face[i] === FACE_NONE && !far.includes(i)) all.push(i);
+  all = all.map(j => [j, Math.hypot(P.x[j] - fr.x, P.y[j] - fr.y)]).sort((a, b) => a[1] - b[1]).map(c => c[0]);
+  const list = all.length ? [all[0], ...far.slice(0, N - 1)] : far.slice(0, N); for (let k = 1; list.length < N && k < all.length; k++) list.push(all[k]);
+  S.bufAll = all.length + far.length; S.bufList = list.slice(0, N); S.bufN = S.bufList.length; return S.bufList.slice(); }
 function wholeChargeReset(S){ const W = CFG.WHOLE, [lo, hi] = W.CHARGE_N, [plo, phi] = W.START_PACK_N; S.charge = 0; S.chargeN = lo + Math.floor(S.R() * (hi - lo + 1)); S.pending = false;
-  if (S.sparks < W.START_PACKS && !S.plain){ S.packN = plo + Math.floor(S.R() * (phi - plo + 1)); S.chargeN = W.START_CHARGE[0]; if (!S.sparks) S.charge = W.START_CHARGE[1]; return; }   // старт легче (v56): первые START_PACKS пачек по 4–5 и кольцо по 2, первое — уже с одним сегментом
+  if (S.sparks < W.START_PACKS && !S.plain){ S.packN = plo + Math.floor(S.R() * (phi - plo + 1)); S.chargeN = W.START_CHARGE[0]; if (!S.sparks) S.charge = W.START_CHARGE[1]; S.farPick = wholeFarPick(S, S.packN - 2, null); return; }   // стартовые пачки: тёплая и лесенка у фронта, остальные по куче (v59)   // старт легче (v56): первые START_PACKS пачек по 4–5 и кольцо по 2, первое — уже с одним сегментом
   const faces = S.facesNow || 0; if (faces < W.URGENT_FACES) S.chargeN = W.START_CHARGE[0];   // срочно (v57): лиц мало — кольцо на 2 снятия
-  S.packN = Math.max(W.PACK_N[0], Math.min(W.PACK_N[1], W.FLOOR - faces + S.chargeN)); }   // пачка от нехватки (v57): до FLOOR лиц с учётом снятий до полёта
+  S.packN = Math.max(W.PACK_N[0], Math.min(W.PACK_N[1], W.FLOOR - faces + S.chargeN));   // пачка от нехватки (v57): до FLOOR лиц с учётом снятий до полёта
+  S.farPick = wholeFarPick(S, S.packN - 1, null); }   // дальние карты пачки — по всей куче (v59)
 function wholeSpark(S){
   const W = CFG.WHOLE, P = S.P, fr = S.front, res = { faced: [], spark: false, rescue: false, pending: false };
   if (S.won) return res;
   zoneCount(S);
-  const buf = wholeBufUpdate(S);
+  const buf = wholeBufUpdate(S);   // v59: уже список пачки (ближняя + дальние)
   if (!S.facesNow && S.charge < S.chargeN) S.charge = S.chargeN;   // предохранитель (v55): лиц в яме нет (метла сняла без заряда) — кольцо считается полным, иначе тупик
   const full = S.charge >= S.chargeN - 1e-9, N = S.packN || S.chargeN, starving = !S.facesNow;   // лиц нет — ждать нечем: летит с тем, что есть
   if (full && starving && !buf.length){ let b = -1, bd = 1e9; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.face[i] === FACE_NONE){ const d = Math.hypot(P.x[i] - fr.x, P.y[i] - fr.y); if (d < bd){ bd = d; b = i; } } if (b >= 0) buf.push(b); }   // рядом рубашек нет — ближайшая вообще
   const startPack = S.sparks < W.START_PACKS && buf.length >= 2;   // стартовые пачки: кольцо по 2 снятия обгоняет физику (0,93 освобождённой за снятие) — летит с тем, что есть (≥ 2), без потолка лиц
   if (full && buf.length >= 1){   // v57: потолка лиц нет — N от нехватки; запас меньше N — летит с тем, что есть (замер: непокрытых без лица в стоге всего 1–3 почти всю партию, ждать нечего); ждёт только при 0
     if (buf.length < N){ S.shortPacks = (S.shortPacks || 0) + 1; S.shortAt = S.shortAt || []; S.shortAt.push(S.removed / P.N); }   // ровно N карт — обещание в кольце (v53); запас < N — кольцо держится полным, пока есть что снимать
-    res.spark = true; res.faced = wholeFaces(S, buf.slice(0, N)); S.packs.push(res.faced.length); S.gaps.push(S.sinceSpark); S.sinceSpark = 0; S.sparks++;
+    res.spark = true; res.faced = wholeFaces(S, buf.slice(0, N)); S.lastPack = res.faced.length; S.packs.push(res.faced.length); S.gaps.push(S.sinceSpark); S.sinceSpark = 0; S.sparks++;
     if (S.pendCur){ S.pendRuns.push(S.pendCur); S.pendAt.push(S.removed / P.N); S.pendCur = 0; } wholeChargeReset(S); wholeBufUpdate(S); return res; }
   if (full) S.pendCur = (S.pendCur || 0) + 1;   // ожидание полного кольца (снятий)
   // спасения нет (v55, Андрей 03.11: «карта открылась раньше, чем я собрал круг» — карты открывает только полное кольцо); нет хода — колода (HELP)
@@ -1518,9 +1539,31 @@ function wholeDraw(S, near){
         if (nr === r0) nr = (2 * f - nr + 13) % 13; if (nr !== r0) top = nr + 13 * Math.floor(S.R() * 4); }
     }
   }
-  S.top = top; S.goldTop = gold; S.goldId = gold ? top : -1; S.streak = 0; S.taps++; S.draws++; S.goal = wholeGoal(S);
+  S.top = top; S.goldTop = gold; S.goldId = gold ? top : -1; S.streak = 0; S.taps++; S.draws++; S.goal = wholeGoal(S); S.hist = [];
   return gold;
 }
+// Секретные ачивки (v60, решение Андрея 03.11): условия игрок узнаёт, выполнив. Детекторы — по цепочке S.hist (снятия подряд без добора:
+// {r, s}), серии и счётчикам; ctx — от игры: total (снятых за всё время), times (моменты последних снятий, мс). Повтор не открывается.
+const ACH = [
+  { id: 'flush', name: 'Флеш', cond: '5 карт подряд одной масти', test: (S) => { const h = S.hist; return h.length >= 5 && h.slice(-5).every(c => c.s === h[h.length - 1].s); } },
+  { id: 'street', name: 'Стрит', cond: '5 карт подряд по возрастанию', test: (S) => runDir(S.hist, 5, 1) },
+  { id: 'rstreet', name: 'Обратный стрит', cond: '5 карт подряд по убыванию', test: (S) => runDir(S.hist, 5, -1) },
+  { id: 'croupier', name: 'Крупье', cond: '500 снятых карт', test: (S, c) => (c.total || 0) >= 500 },
+  { id: 'world', name: 'Кругосветка', cond: 'цепочка прошла все 13 рангов', test: (S) => new Set(S.hist.map(c => c.r)).size >= 13 },
+  { id: 'zebra', name: 'Зебра', cond: '10 карт подряд с чередованием цвета', test: (S) => { const h = S.hist; if (h.length < 10) return false; for (let i = h.length - 9; i < h.length; i++) if (isRed(h[i].s) === isRed(h[i - 1].s)) return false; return true; } },
+  { id: 'mono', name: 'Монохром', cond: '8 карт подряд одного цвета', test: (S) => { const h = S.hist; return h.length >= 8 && h.slice(-8).every(c => isRed(c.s) === isRed(h[h.length - 1].s)); } },
+  { id: 'swing', name: 'Качели', cond: '6 карт подряд со сменой направления на каждом шаге', test: (S) => { const h = S.hist; if (h.length < 6) return false; let prev = 0; for (let i = h.length - 5; i < h.length; i++){ const d = stepDir(h[i - 1].r, h[i].r); if (!d || d === prev) return false; prev = d; } return true; } },
+  { id: 'self', name: 'Своими силами', cond: '30 снятий подряд без колоды', test: (S) => S.streak >= 30 },
+  { id: 'marathon', name: 'Марафон', cond: 'серия 50', test: (S) => S.streak >= 50 },
+  { id: 'court', name: 'Двор', cond: 'K, Q, J подряд', test: (S) => { const h = S.hist; if (h.length < 3) return false; const r = h.slice(-3).map(c => c.r).join(','); return r === '12,11,10' || r === '10,11,12'; } },
+  { id: 'jeweler', name: 'Ювелир', cond: '3 золотые карты за один стог', test: (S) => S.golds.filter(g => g.got >= CFG.GOLD.PIECES).length >= 3 },
+  { id: 'volley', name: 'Залп', cond: 'пачка искры из 6 карт', test: (S) => S.lastPack >= 6 },
+  { id: 'lightning', name: 'Молния', cond: '10 снятий за 10 секунд', test: (S, c) => { const t = c.times || []; return t.length >= 10 && t[t.length - 1] - t[t.length - 10] <= 10000; } },
+];
+function isRed(suit){ return suit === 1 || suit === 2; }
+function stepDir(a, b){ const d = (b - a + 13) % 13; return d === 1 ? 1 : d === 12 ? -1 : 0; }   // ±1 по кругу (K↔A), иначе 0
+function runDir(h, n, dir){ if (h.length < n) return false; for (let i = h.length - n + 1; i < h.length; i++) if (stepDir(h[i - 1].r, h[i].r) !== dir) return false; return true; }
+function wholeAch(S, ctx){ const out = []; if (!S.achDone) S.achDone = new Set(); for (const a of ACH){ if (S.achDone.has(a.id)) continue; if (a.test(S, ctx || {})){ S.achDone.add(a.id); out.push(a.id); } } return out; }
 // «магнит» (способность): текущая карта меняется на подходящую к открытой в кадре near (с продолжением — как помощь колоды),
 // серия не рвётся, золотая на отбое — нет. → новая текущая или −1, если в кадре нечего снять
 function wholeMagnet(S, near){
@@ -1581,7 +1624,7 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
   const chains = [], jokAt = [], goldAt = [], spread = [], flipD = [], flipN = [], waves = [], facesBefore = [], facesAfter = [];   // spread — «площадь ямы»: средний разброс открытых в яме от центра (EMA последних снятых), на каждый ход;
   let cx = 0, cy = 0, moves2 = 0, movesAll = 0;   // flipD — расстояние от снятой до каждого перевёрнутого лица; flipN — перевёрнутых за снятие; moves2 — ходов с ≥ 2 вариантами в кадре
   const mult = [], flipSeq = []; let mult3 = 0, ladders = 0, ladders1 = 0, waveDup = 0, wavesN2 = 0;
-  const decN = new Array(10).fill(0), decFaces = Array.from({ length: 10 }, () => []), decPacks = Array.from({ length: 10 }, () => []), decRescue = new Array(10).fill(0), decEmpty0 = new Array(10).fill(0), decFlips = new Array(10).fill(0), decEmpty = new Array(10).fill(0), decDraws = new Array(10).fill(0);   // v50: перевёрнутых за снятие и пустых снятий по децилям прогресса   // ladders1 — то же с шагом ровно 1 (8-9-10)   // v48, россыпь номиналов: mult — максимальная кратность ранга среди лиц в кадре после хода; mult3 — ходов с ≥ 3 одного ранга;
+  const farFrac = [], decN = new Array(10).fill(0), decFaces = Array.from({ length: 10 }, () => []), decPacks = Array.from({ length: 10 }, () => []), decRescue = new Array(10).fill(0), decEmpty0 = new Array(10).fill(0), decFlips = new Array(10).fill(0), decEmpty = new Array(10).fill(0), decDraws = new Array(10).fill(0);   // v50: перевёрнутых за снятие и пустых снятий по децилям прогресса   // ladders1 — то же с шагом ровно 1 (8-9-10)   // v48, россыпь номиналов: mult — максимальная кратность ранга среди лиц в кадре после хода; mult3 — ходов с ≥ 3 одного ранга;
   const ladderStep = (a, b) => { const d = (b - a + 13) % 13; return d >= 1 && d <= 3 ? 1 : d >= 10 ? -1 : 0; };   // ladders — три подряд перевёрнутых ранга в одну сторону (шаг 1–3); waveDup — волн с повтором ранга
   for (let i = 0; i < P.N; i++) if (!S.cover[i] && S.zone[i]) open.add(i);
   while (!S.won && S.taps < (maxTaps || 60000)){
@@ -1596,7 +1639,8 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
     if (pick === undefined) for (const i of pl){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; pick = i; } }
     const facesPre = open.size - 1;             // лиц перед ходом без снятой (волна сработала при facesPre + из-под снятой ≤ WAVE_LOW)
     const dec = Math.min(9, Math.floor(S.removed / P.N * 10));
-    const r = wholeTap(S, pick); open.clear(); decN[dec]++; decFaces[dec].push(S.facesNow); if (r.spark && !r.rescue) decPacks[dec].push(r.faced.length); if (r.rescue) decRescue[dec]++; if (!r.freed) decEmpty0[dec]++; decFlips[dec] += (r.faced || []).length; if (!(r.faced || []).length) decEmpty[dec]++; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i]) open.add(i); fx = P.x[pick]; fy = P.y[pick];   // яма может и сузиться — открытые заново
+    const r = wholeTap(S, pick); open.clear(); decN[dec]++; decFaces[dec].push(S.facesNow);
+    { let far = 0, all = 0; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.face[i] >= 0 && S.face[i] < 52){ all++; if (Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y) > CFG.WHOLE.FLIP_R) far++; } if (all) farFrac.push(far / all); } if (r.spark && !r.rescue) decPacks[dec].push(r.faced.length); if (r.rescue) decRescue[dec]++; if (!r.freed) decEmpty0[dec]++; decFlips[dec] += (r.faced || []).length; if (!(r.faced || []).length) decEmpty[dec]++; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i]) open.add(i); fx = P.x[pick]; fy = P.y[pick];   // яма может и сузиться — открытые заново
     flipN.push((r.faced || []).length); for (const j of r.faced || []) flipD.push(Math.hypot(P.x[j] - P.x[pick], P.y[j] - P.y[pick]));
     { const fresh = (r.faced || []).filter(j => S.face[j] >= 0 && S.face[j] < 52).map(j => rk(S.face[j]));   // обычные лица волны по порядку переворота
       if (fresh.length >= 2){ wavesN2++; if (new Set(fresh).size < fresh.length) waveDup++; }
@@ -1612,7 +1656,7 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
   return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won, open: sumOpen / Math.max(1, nOpen), chains, jokAt, goldAt, goldDraws, best: S.best, spreadP90: q(spread, 0.9),
     flipDistP90: q(flipD, 0.9), waveMed: q(waves, 0.5), waveP10: q(waves, 0.1), waveP90: q(waves, 0.9), wavesN: waves.length, facesBeforeAvg: facesBefore.reduce((a, b) => a + b, 0) / Math.max(1, facesBefore.length), facesAfterAvg: facesAfter.reduce((a, b) => a + b, 0) / Math.max(1, facesAfter.length),
     flipPerMoveAvg: flipN.reduce((a, b) => a + b, 0) / Math.max(1, flipN.length), choice2: moves2 / Math.max(1, movesAll), S,
-    decPack: decPacks.map(a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0), decFacesMed: decFaces.map(a => q(a, 0.5)), decFacesMin: decFaces.map(a => a.length ? Math.min(...a) : 0), decPend: [0,1,2,3,4,5,6,7,8,9].map(i => S.pendAt.filter(x => Math.floor(x * 10) === i).length), decShort: [0,1,2,3,4,5,6,7,8,9].map(i => (S.shortAt || []).filter(x => Math.floor(x * 10) === i).length), decRescue: decRescue.map((r, i) => r / Math.max(1, decN[i])), decEmpty0: decEmpty0.map((e, i) => e / Math.max(1, decN[i])), decGap: decPacks.map((a, i) => a.length ? decN[i] / a.length : 0),
+    farFrac: farFrac.length ? farFrac.reduce((a, b) => a + b, 0) / farFrac.length : 0, decPack: decPacks.map(a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0), decFacesMed: decFaces.map(a => q(a, 0.5)), decFacesMin: decFaces.map(a => a.length ? Math.min(...a) : 0), decPend: [0,1,2,3,4,5,6,7,8,9].map(i => S.pendAt.filter(x => Math.floor(x * 10) === i).length), decShort: [0,1,2,3,4,5,6,7,8,9].map(i => (S.shortAt || []).filter(x => Math.floor(x * 10) === i).length), decRescue: decRescue.map((r, i) => r / Math.max(1, decN[i])), decEmpty0: decEmpty0.map((e, i) => e / Math.max(1, decN[i])), decGap: decPacks.map((a, i) => a.length ? decN[i] / a.length : 0),
     packs: S.packs, gaps: S.gaps, rescues: S.rescues, sparks: S.sparks, pendRuns: S.pendRuns, firstPack: S.packs[0] || 0, decFlips: decFlips.map((f, i) => f / Math.max(1, decN[i])), decEmpty: decEmpty.map((e, i) => e / Math.max(1, decN[i])), decDraws: decDraws.map((d, i) => d / Math.max(1, decN[i] + d)),
     multAvg: mult.reduce((a, b) => a + b, 0) / Math.max(1, mult.length), multP90: q(mult, 0.9), mult3: mult3 / Math.max(1, mult.length), ladders: ladders / Math.max(1, flipSeq.length), ladders1: ladders1 / Math.max(1, flipSeq.length), waveDup: waveDup / Math.max(1, wavesN2) };
 }
@@ -1685,7 +1729,7 @@ const G = {
   aliveNow: null,          // Uint8Array: живые карты стога сейчас (без снятых в прошлых ямах и в текущей)
   pitOn: false,            // стиль ямы включён: закрытые рубашкой, остальной стог тусклый
   sparks: new Set(),       // узлы ямы с искрой-монетой
-  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, music: true, removed: {}, metrics: {}, plus5Free: {}, endless: { best: 0, runs: 0, aces: 0, pile: null, piles: 0, jokers: 0, charges: {} }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} }, whole: { runs: 0, wins: 0, seed: 0, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0 }, gold: { cards: [] },
+  save: Object.assign({ level: 0, coins: CFG.COINS_START, muted: false, music: true, removed: {}, metrics: {}, plus5Free: {}, ach: { done: {}, total: 0 }, endless: { best: 0, runs: 0, aces: 0, pile: null, piles: 0, jokers: 0, charges: {} }, search: { k: 0, runs: 0, seed: 1, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0, best: {} }, whole: { runs: 0, wins: 0, seed: 0, removed: [], top: 0, taps: 0, draws: 0, elapsed: 0 }, gold: { cards: [] },
     seen: {} }, loadSave(), { gold: Object.assign({ cards: [] }, (loadSave().gold || {})) }),   // seen — разовые подсказки и интро режимов: endless, search, endlessAce, hold, cover1, dust, glint, zoom
   mode: 'campaign',       // campaign — 10 ям теста; endless — бесконечный стог; search — «Иголка в стоге»
   run: null,              // забег бесконечного стога (endlessStart): свой живой стог, тузы, снятые карты
@@ -4592,6 +4636,7 @@ function renderUI(t){
   if (G.mode === 'search' && G.srch && G.srch.whole && (G.phase === 'over' || G.phase === 'dive') && !G.melt && G.fake) drawWholeSpark(c, t);
   if (G.melt) drawMelt(c, t);
   if (G.mode === 'search') drawGlint(c, t);
+  achStart(t); for (const f of G.fx) if (f.kind === 'ach') drawAch(c, f, t);   // открытие секретной ачивки (v60)
   for (const f of G.fx) if ((f.kind === 'fly' || f.kind === 'deal' || f.kind === 'golddraw') && !f.landed && t >= f.t0 + f.dur) land(f, t);   // посадка — до отбоя: в кадре посадки стопка уже сдвинута
   for (const f of G.fx) if (f.kind === 'veil') drawVeil(c, f, t);   // пылевая вуаль подмены сцены — под панелью
   if (G.mode === 'search' && G.srch && G.srch.whole && G.screen === 'game') drawBufMarks(c, t, G.srch);   // искорки запаса на картах
@@ -4632,6 +4677,49 @@ function menuModel(){
 }
 // картинки экранов — из атласа, холсты в 2× (data-pic): правила справки, веер «+5», туз финального экрана, мини-тузы, логотип
 function paintPics(root){ if (S.atlas) for (const cv of root.querySelectorAll('canvas[data-pic]')) drawPic(cv, cv.dataset.pic); }
+// ---------- секретные ачивки (v60): жетоны, открытие, галерея ----------
+const ACH_CANVAS = {};
+// золотой круглый жетон 128×128 с символом (путями, без эмодзи); locked — тёмный с «?»
+function achCanvas(id, locked){ const key = id + (locked ? ':l' : ''); if (ACH_CANVAS[key]) return ACH_CANVAS[key];
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128; const c = cv.getContext('2d'), cx = 64, cy = 64, R = 58;
+  const g = c.createRadialGradient(cx - 16, cy - 20, 6, cx, cy, R); if (locked){ g.addColorStop(0, '#4a4a44'); g.addColorStop(1, '#23231f'); } else { g.addColorStop(0, '#fff1b8'); g.addColorStop(0.55, '#ffcc4a'); g.addColorStop(1, '#c98a12'); }
+  c.fillStyle = g; c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.fill(); c.lineWidth = 4; c.strokeStyle = locked ? '#141410' : '#8a5a08'; c.stroke();
+  c.lineWidth = 2; c.strokeStyle = locked ? 'rgba(255,255,255,.08)' : 'rgba(255,255,255,.55)'; c.beginPath(); c.arc(cx, cy, R - 7, 0, Math.PI * 2); c.stroke();
+  c.fillStyle = locked ? '#8a8a80' : '#5a3a06'; c.strokeStyle = c.fillStyle; c.lineWidth = 5; c.lineCap = 'round'; c.lineJoin = 'round'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  if (locked){ c.font = '900 56px ' + FONT; c.fillText('?', cx, cy + 3); ACH_CANVAS[key] = cv; return cv; }
+  const sym = {
+    flush(){ for (let k = -2; k <= 2; k++){ c.save(); c.translate(cx, cy + 22); c.rotate(k * 0.28); c.fillStyle = '#fff7e0'; rr(c, -11, -46, 22, 32, 3); c.fill(); c.strokeStyle = '#5a3a06'; c.lineWidth = 2; c.stroke(); c.fillStyle = '#c0282e'; heart(0, -30, 6); c.restore(); } },
+    street(){ for (let k = 0; k < 4; k++){ c.fillRect(cx - 34 + k * 16, cy + 24 - k * 12, 12, 10 + k * 12); } c.beginPath(); c.moveTo(cx + 22, cy - 26); c.lineTo(cx + 36, cy - 12); c.moveTo(cx + 22, cy - 26); c.lineTo(cx + 8, cy - 12); c.moveTo(cx + 22, cy - 26); c.lineTo(cx + 22, cy + 2); c.stroke(); },
+    rstreet(){ for (let k = 0; k < 4; k++){ c.fillRect(cx - 34 + k * 16, cy - 12 + k * 12, 12, 46 - k * 12); } c.beginPath(); c.moveTo(cx + 22, cy + 34); c.lineTo(cx + 36, cy + 20); c.moveTo(cx + 22, cy + 34); c.lineTo(cx + 8, cy + 20); c.moveTo(cx + 22, cy + 34); c.lineTo(cx + 22, cy + 4); c.stroke(); },
+    croupier(){ c.beginPath(); c.moveTo(cx - 6, cy); c.lineTo(cx - 36, cy - 18); c.lineTo(cx - 36, cy + 18); c.closePath(); c.fill(); c.beginPath(); c.moveTo(cx + 6, cy); c.lineTo(cx + 36, cy - 18); c.lineTo(cx + 36, cy + 18); c.closePath(); c.fill(); rr(c, cx - 8, cy - 9, 16, 18, 4); c.fill(); },
+    world(){ for (let k = 0; k < 13; k++){ const a = k / 13 * Math.PI * 2 - Math.PI / 2; c.beginPath(); c.arc(cx + Math.cos(a) * 34, cy + Math.sin(a) * 34, 5, 0, Math.PI * 2); c.fill(); } c.lineWidth = 2; c.beginPath(); c.arc(cx, cy, 34, 0, Math.PI * 2); c.stroke(); },
+    zebra(){ c.save(); c.beginPath(); c.arc(cx, cy, 36, 0, Math.PI * 2); c.clip(); for (let k = 0; k < 8; k++){ c.fillStyle = k % 2 ? '#c0282e' : '#1e1a16'; c.fillRect(cx - 36 + k * 9, cy - 36, 9, 72); } c.restore(); },
+    mono(){ c.beginPath(); c.moveTo(cx, cy - 36); c.bezierCurveTo(cx + 30, cy + 2, cx + 26, cy + 34, cx, cy + 34); c.bezierCurveTo(cx - 26, cy + 34, cx - 30, cy + 2, cx, cy - 36); c.fill(); },
+    swing(){ c.lineWidth = 7; c.beginPath(); c.moveTo(cx - 36, cy + 20); c.lineTo(cx - 18, cy - 20); c.lineTo(cx, cy + 20); c.lineTo(cx + 18, cy - 20); c.lineTo(cx + 36, cy + 20); c.stroke(); },
+    self(){ for (let k = 2; k >= 0; k--){ c.fillStyle = '#fff7e0'; rr(c, cx - 18 + k * 5, cy - 26 + k * 5, 30, 42, 3); c.fill(); c.strokeStyle = '#5a3a06'; c.lineWidth = 2; c.stroke(); } c.strokeStyle = '#c0282e'; c.lineWidth = 7; c.beginPath(); c.moveTo(cx - 32, cy + 30); c.lineTo(cx + 32, cy - 30); c.stroke(); },
+    marathon(){ c.fillStyle = '#c0282e'; c.beginPath(); c.moveTo(cx - 44, cy - 14); c.lineTo(cx + 44, cy - 14); c.lineTo(cx + 36, cy + 14); c.lineTo(cx - 36, cy + 14); c.closePath(); c.fill(); c.fillStyle = '#fff7e0'; c.font = '900 24px ' + FONT; c.fillText('50', cx, cy + 1); },
+    court(){ c.beginPath(); c.moveTo(cx - 36, cy + 24); c.lineTo(cx - 36, cy - 16); c.lineTo(cx - 16, cy + 2); c.lineTo(cx, cy - 28); c.lineTo(cx + 16, cy + 2); c.lineTo(cx + 36, cy - 16); c.lineTo(cx + 36, cy + 24); c.closePath(); c.fill(); },
+    jeweler(){ for (let k = -1; k <= 1; k++){ c.save(); c.translate(cx, cy + 24); c.rotate(k * 0.35); const gg = c.createLinearGradient(0, -48, 0, -10); gg.addColorStop(0, '#fff1b8'); gg.addColorStop(1, '#d9a228'); c.fillStyle = gg; rr(c, -12, -50, 24, 36, 3); c.fill(); c.strokeStyle = '#5a3a06'; c.lineWidth = 2; c.stroke(); c.restore(); } },
+    volley(){ for (let k = 0; k < 6; k++){ const a = k / 6 * Math.PI * 2; c.lineWidth = 6; c.beginPath(); c.moveTo(cx + Math.cos(a) * 10, cy + Math.sin(a) * 10); c.lineTo(cx + Math.cos(a) * 36, cy + Math.sin(a) * 36); c.stroke(); } c.beginPath(); c.arc(cx, cy, 10, 0, Math.PI * 2); c.fill(); },
+    lightning(){ c.beginPath(); c.moveTo(cx + 6, cy - 38); c.lineTo(cx - 20, cy + 4); c.lineTo(cx - 2, cy + 4); c.lineTo(cx - 10, cy + 38); c.lineTo(cx + 22, cy - 8); c.lineTo(cx + 4, cy - 8); c.closePath(); c.fill(); },
+  };
+  const heart = (x, y, r) => { c.beginPath(); c.moveTo(x, y + r); c.bezierCurveTo(x - r * 1.6, y - r * 0.4, x - r * 0.6, y - r * 1.4, x, y - r * 0.5); c.bezierCurveTo(x + r * 0.6, y - r * 1.4, x + r * 1.6, y - r * 0.4, x, y + r); c.fill(); };
+  (sym[id] || sym.volley)(); ACH_CANVAS[key] = cv; return cv; }
+function achUnlock(id){ const a = ACH.find(x => x.id === id); if (!a || G.save.ach.done[id]) return; G.save.ach.done[id] = Date.now(); save(); (G.achQueue || (G.achQueue = [])).push(id); log('event', 'ach', id); }
+function menuBtnPos(){ const fr = $('frame').getBoundingClientRect(), r = $('btn-menu').getBoundingClientRect(); return { x: (r.left + r.width / 2 - fr.left) / scale, y: (r.top + r.height / 2 - fr.top) / scale }; }
+// открытие: по центру поля жетон 1,5 → 1, вспышка, звёзды, короткое конфетти, фанфара выше серии, «ФЛЕШ!» и условие; ACH_MS, потом жетон летит в ☰ (ACH_FLY_MS), кнопка подскакивает
+function achStart(t){ if (!G.achQueue || !G.achQueue.length || G.fx.some(f => f.kind === 'ach') || G.screen !== 'game' || G.phase !== 'play') return;
+  const id = G.achQueue.shift(), FX = CFG.FX, y = fieldMidY(); addFx({ kind: 'ach', id, t0: t, dur: FX.ACH_MS + FX.ACH_FLY_MS, info: id });
+  burst(VW / 2, y, 22, 90, 900, t | 0); addFx({ kind: 'flash', x: VW / 2, y, dur: FX.FLASH_MS }); confetti(t | 0, t + 100, 900); Audio.fanfare(3); Audio.bell(2093, 0.08, 1.2, 0.35); buzz('milestone'); }
+function drawAch(c, f, t){
+  const FX = CFG.FX, a = ACH.find(x => x.id === f.id), u = t - f.t0, cv = achCanvas(f.id); if (!a) return;
+  if (u < FX.ACH_MS){ const s = 1.5 - 0.5 * easeOutBack(Math.min(1, u / 320)), y = fieldMidY(), al = u > FX.ACH_MS - 150 ? (FX.ACH_MS - u) / 150 : 1;
+    c.save(); c.globalAlpha = al; glow(c, GLOW.gold, VW / 2, y, 70 * s, 0.6, 70 * s); c.translate(VW / 2, y); c.scale(s, s); c.drawImage(cv, -44, -44, 88, 88); c.restore();
+    c.save(); c.globalAlpha = al; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round'; outlined(c, a.name.toUpperCase() + '!', VW / 2, y - 76, '900 30px ' + FONT, PAL.goldText, 7); outlined(c, a.cond, VW / 2, y + 72, '800 14px ' + FONT, PAL.cream, 4); c.restore(); return; }
+  const q = Math.min(1, (u - FX.ACH_MS) / FX.ACH_FLY_MS), e = easeInOutSine(q), y0 = fieldMidY(), p = menuBtnPos(), x = VW / 2 + (p.x - VW / 2) * e, y = y0 + (p.y - y0) * e - Math.sin(Math.PI * q) * 60, s = 1 - 0.75 * e;
+  c.save(); c.translate(x, y); c.scale(s, s); c.drawImage(cv, -44, -44, 88, 88); c.restore();
+  if (q >= 1 && !f.landed){ f.landed = true; const b = $('btn-menu'); b.classList.remove('bump'); void b.offsetWidth; b.classList.add('bump'); Audio.ui(); }
+}
 function drawPic(cv, kind){
   const c = cv.getContext('2d'), W = cv.width, Hc = cv.height, P = palette();
   c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, W, Hc); c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
@@ -4640,6 +4728,8 @@ function drawPic(cv, kind){
     c.fillStyle = P.cream; c.font = '900 20px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, x + w / 2, y + h / 2 + 1); };
   const deck = (x, y, w, h) => { for (let k = 2; k >= 0; k--) card(CELL_BACK, x + 4 * k, y + 4 * k, w, h); };
   if (kind.startsWith('goldprog:')){ const Z = G.srch, g = Z && Z.golds[+kind.slice(9)]; if (g) drawGoldProgress(c, g.id, g.cards.map(i => i >= 0 && !Z.alive[i] ? 1 : 0), 1, 1, W - 2, Hc - 2); }
+  else if (kind.startsWith('ach:')){ const id = kind.slice(4); c.drawImage(achCanvas(id, false), 0, 0, W, Hc); }   // жетон ачивки (v60)
+  else if (kind === 'achlock') c.drawImage(achCanvas('x', true), 0, 0, W, Hc);
   else if (kind.startsWith('goldcard:')){ const id = +kind.slice(9); c.save(); rr(c, 1, 1, W - 2, Hc - 2, W * 0.085); c.clip(); c.drawImage(goldCanvas(id), 1, 1, W - 2, Hc - 2); c.restore(); c.lineWidth = Math.max(1, W * 0.02); c.strokeStyle = 'rgba(80,50,10,.7)'; rr(c, 1, 1, W - 2, Hc - 2, W * 0.085); c.stroke(); }
   else if (kind === 'ace' || kind === 'gold' || kind === 'mini') card(CELL_GOLD, 1, 1, W - 2, Hc - 2);
   else if (kind === 'logo') card(CELL_GOLD, (W - 50) / 2, (Hc - 70) / 2, 50, 70, -8 * Math.PI / 180);   // вместо «О»: туз, повёрнутый на −8° внутри холста
@@ -4724,7 +4814,7 @@ function goto(screen){
   G.prevScreen = G.screen; G.screen = screen; log('screen', screen);
   // интро режимов и сброс открываются из меню и шапкой ведут себя как меню: заголовок прошлого режима («Куча 1») над интро
   // другого режима не висит
-  $('frame').classList.toggle('in-menu', ['menu', 'intro-endless', 'intro-search', 'confirm-reset', 'album'].includes(screen));
+  $('frame').classList.toggle('in-menu', ['menu', 'intro-endless', 'intro-search', 'confirm-reset', 'album', 'album-ach'].includes(screen));
   if (G.final){ if (!G.final.done) log('fx.end', 'final.count', 'cut'); G.final = null; log('fx.end', 'final.rays'); }
   if (screen === 'game' || screen === 'offer') menuCamBack();
   if (screen === 'game'){
@@ -4804,11 +4894,19 @@ function goto(screen){
     finalOpen();
   }
   if (screen === 'results') show(resultsHtml());
+  const tabs = (cur) => `<div class="tabs"><button data-act="album"${cur === 'gold' ? ' class="on"' : ''}>Золотые</button><button data-act="album-ach"${cur === 'ach' ? ' class="on"' : ''}>Ачивки</button></div>`;   // вкладки альбома (v60)
+  if (screen === 'album-ach'){                  // галерея секретных ачивок: открытые — жетон, название, условие, дата; закрытые — тёмный жетон с «?»
+    const done = (G.save.ach && G.save.ach.done) || {}, n = Object.keys(done).length, Zl = G.mode === 'search' && G.srch && G.srch.whole;
+    const cells = ACH.map(a => done[a.id] ? `<div class="ach"><canvas width="96" height="96" data-pic="ach:${a.id}"></canvas><b>${a.name}</b><small>${a.cond}</small><small class="date">${new Date(done[a.id]).toLocaleDateString('ru-RU')}</small></div>`
+      : `<div class="ach lock"><canvas width="96" height="96" data-pic="achlock"></canvas><b>???</b><small>секрет</small></div>`).join('');
+    show(`<h2>Альбом</h2>${tabs('ach')}<p class="sub">открыто ${n} из ${ACH.length}</p><div class="achgrid">${cells}</div>
+      <div class="foot"><button class="btn primary wide" data-act="${Zl && G.phase !== 'idle' ? 'resume' : 'menu'}">Понятно</button></div>`);
+  }
   if (screen === 'album'){                      // альбом золотых: собираемые в этом стоге (пунктир, четверти, силуэт) и коллекция
     const Z = G.mode === 'search' && G.srch && G.srch.whole ? G.srch : null, all = G.save.gold.cards, GDp = CFG.GOLD.PIECES;
     const cur = Z ? Z.golds.map((g, gi) => `<div class="alb"><canvas width="88" height="124" data-pic="goldprog:${gi}"></canvas><small>${g.got}/${GDp}</small></div>`).join('') : '';
     const coll = all.length ? all.map(id => `<div class="alb"><canvas width="88" height="124" data-pic="goldcard:${id}"></canvas></div>`).join('') : '<p class="sub">пока пусто — собери четыре кусочка</p>';
-    show(`<h2>Альбом золотых</h2>${Z ? '<p class="sub">в этом стоге</p><div class="album">' + cur + '</div>' : ''}<p class="sub">в колоде${all.length ? ' · ' + all.length : ''}</p><div class="album">${coll}</div>
+    show(`<h2>Альбом</h2>${tabs('gold')}${Z ? '<p class="sub">в этом стоге</p><div class="album">' + cur + '</div>' : ''}<p class="sub">в колоде${all.length ? ' · ' + all.length : ''}</p><div class="album">${coll}</div>
       <p class="sub">Кусочки лежат в стоге, снимаются по ±1. Собранная золотая выходит из колоды: пока серия идёт на ней, монеты ×${CFG.GOLD.BONUS_X}</p>
       <div class="foot"><button class="btn primary wide" data-act="${Z && G.phase !== 'idle' ? 'resume' : 'menu'}">Понятно</button></div>`);
   }
@@ -4883,6 +4981,7 @@ $('card').addEventListener('click', (e) => {
   else if (act === 'search-next') searchSoon(G.save.search.k);
   else if (act === 'help') goto('help');
   else if (act === 'album') goto('album');
+  else if (act === 'album-ach') goto('album-ach');
   else if (act === 'music'){ G.save.music = G.save.music === false; save(); Audio.init(); b.classList.toggle('off', !G.save.music); b.setAttribute('aria-pressed', G.save.music); }   // музыка — в планировщике (Audio.musicTick)
   else if (act === 'results') goto('results');
   else if (act === 'menu') goto('menu');
@@ -4930,7 +5029,7 @@ function routeHash(h){
   else if (h === 'search'){ G.save.seen.search = 1; save(); searchSoon(); }
   else if (h === 'whole') searchSoon(0, true);
   else if (h === 'confirm-reset'){ G.resetThen = 'menu'; goto('confirm-reset'); }
-  else if (['menu', 'help', 'results', 'album', 'intro-endless', 'intro-search'].includes(h)) goto(h);
+  else if (['menu', 'help', 'results', 'album', 'album-ach', 'intro-endless', 'intro-search'].includes(h)) goto(h);
   else goto('menu');
 }
 window.addEventListener('hashchange', () => routeHash(location.hash.slice(1)));
@@ -5106,6 +5205,7 @@ function searchHit(hit){
   if (!r.ok) return;                            // 'gone' приходит без opened
   if (how){ G.wildArmed = false; spendCharge('wild'); tip(''); }
   if (r.gold) return searchWin(quad);
+  if (Z.whole){ G.save.ach.total++; (G.tapTimes || (G.tapTimes = [])).push(now()); if (G.tapTimes.length > 12) G.tapTimes.shift(); for (const id of wholeAch(Z, { total: G.save.ach.total, times: G.tapTimes })) achUnlock(id); }   // секретные ачивки (v60)
   if (r.half !== undefined || r.piece !== undefined) wholeSpecial(r, quad, id, face);   // половинка / кусочек: не на отбой
   else flyFx(id, quad, prev, Z.streak, { prevGold, goldTrail: !!(Z.whole && Z.goldTop) });
   if (r.done) return wholeWin(quad);
@@ -5304,6 +5404,7 @@ function startSearch(k, whole){
   if (whole){ G.overPose = null; G.sz = G.szTo = 1; G.sfocus = { x: Z.front.x, z: Z.front.y }; G.wholeH = wholeHFor(P.N - Z.removed - (P.N - Z.removed) % Math.round(P.N * CFG.WHOLE.MILE), P.N); G.pileH = G.wholeH; }   // высота — по последней вехе; общий план — фейковый стог меню (wholeFakeOn ниже), искра у фронта, нырок — wholeDive
   G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;   // (до v47 эта строка была в комментарии: home оставался «over» меню, и menuCamBack двигал камеру)
   G.phase = whole ? 'over' : 'play'; if (whole){ G.overAt = now(); G.phaseUntil = G.overAt + CFG.WHOLE.OVER_SHOW_MS; } goto('game'); save();
+  if (whole){ if (!G.save.ach) G.save.ach = { done: {}, total: 0 }; Z.achDone = new Set(Object.keys(G.save.ach.done)); G.tapTimes = []; }   // ачивки (v60): открытые — из сейва
   G.wholeTut = whole && !G.save.seen.wholeTut && !Z.removed ? 1 : 0;   // урок на первых ходах (коротко: снимай ±1, держи серию)
   G.chainZoomK = 1; G.heatK = 0; G.heatPt = { x: 0, z: 0 }; G.chainBreakAt = -1e9; G.hS = null;
   tip(whole ? '' : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
@@ -5566,6 +5667,7 @@ window.STOG = {
     G.wholeMile = Math.floor(G.srch.removed / P.N / CFG.WHOLE.MILE); G.wholeH = wholeHFor(P.N - G.srch.removed, P.N); G.pileH = G.wholeH; refreshData(); hud(); searchSave(true);
     if (G.phase === 'over'){ wholeDive(); this.settle(); } return this.sstate(); },   // хук — сразу в игру (общий план — STOG.wover())
   wover(frac){ if (frac) this.whole(frac); else startSearch(0, true); camTw = null; G.melt = null; G.meltPending = null; G.diveMs = 0; wholeFakeOn(); Object.assign(CAM, wholeFakePose()); G.phase = 'over'; G.phaseUntil = now() + 1e9; G.sfocus = { x: G.srch.front.x, z: G.srch.front.y }; return this.sstate(); },   // общий план «Одного стога» (фейковый стог меню) без автонырка (кадры)
+  ach(id){ if (id === 'reset'){ G.save.ach = { done: {}, total: 0 }; save(); return 0; } achUnlock(id); return Object.keys(G.save.ach.done); },   // открыть ачивку (кадры)
   wring(n, charge, packN){ const Z = G.srch; if (!Z || !Z.whole) return null; Z.chargeN = n; Z.charge = charge || 0; if (packN) Z.packN = packN; wholeBufUpdate(Z); return { n: Z.chargeN, charge: Z.charge, packN: Z.packN, marks: Z.bufList.length, left: Math.ceil(Z.chargeN - Z.charge) }; },   // кадры: кольцо (снятий, заряд), N карт пачки
   wrise(){ if (G.phase === 'play' && !camTw){ G.phase = 'over'; G.phaseUntil = now() + 1e9; wholeRise(CFG.WHOLE.RISE_MS, 'rise'); } return G.phase; },   // подъём на общий план, как по кнопке «вся куча»
   wdive(){ if (G.phase === 'over') wholeDive(); return G.phase; },
