@@ -290,10 +290,11 @@ const CFG = {
                           //   лица решаются при перевороте; пока серия короче скрытой цели — одна из открывшихся карт ±1 к взятой,
                           //   серия дошла до цели — открывающиеся карты не ±1 (срыв за 1–3 карты на видимых); добор — новая цель
       GOAL: [12, 24],     //     цель цепочки — случайно в этих границах (сид стога); калибровка `node sim.mjs whole`: медиана серии 12–16
-      POOL_W: [0.4, 0.35, 0.25],   // подыгрыш не в лоб (v38): пока серия короче цели, каждое новое лицо — из «тёплого пула» вокруг текущей:
-                          //     ранг текущей ± 1 / ± 2 / ± 3 с такими весами, знак случайный (к кусочку золотой или дальнему лицу — с весом
-                          //     POOL_DIR_P); в волне из 4 подходящих обычно 1–2 — похоже на везение, а не на подачу (без ±1 вовсе — 13%)
-      POOL_DIR_P: 1,      //     вероятность знака пула в сторону волны (лесенка ±1, ±2, ±3 в одну сторону — играются друг за другом; 0,8 давало медиану 8–9, 1 — 9–11)
+      WARM_P1: 0.75,      //     подыгрыш не в лоб (v48, волна без повторов): пока серия короче цели, в волне ровно одна «тёплая» карта — ±1 к
+      WIDE_D: 6,          //     текущей с такой вероятностью, иначе ±2; остальные — из широкого круга ±2…±WIDE_D в обе стороны, ранги волны разные,
+                          //     запрещён ранг, которого в яме уже два, и ранг двух последних перевёрнутых; масти в волне разные (до v48 — пул
+                          //     ±1/±2/±3 с весами 0,4/0,35/0,25 и одним знаком на волну: «три короля, потом туз, король»)
+      POOL_DIR_P: 1,      //     вероятность знака тёплой карты в сторону ведения (к кусочку золотой / дальнему лицу)
       NOFIT_P1: 1,        //     если сейчас ни одно лицо не подходит к текущей (цепочка оборвётся), первое новое лицо — ±1 с такой вероятностью
       SOFT_TAPS: 3,       //     срыв мягкий (плейтест v37: «потом стена»): после цели шанс тёплого пула падает 1 → SOFT_MIN за столько снятий…
       SOFT_MIN: 0.3,      //     …и держится; иначе лица — честный случай не ранга текущей (не «нарочно мимо»): цепочка кончается сама
@@ -323,6 +324,17 @@ const CFG = {
     OVER_SHOW_MS: 1600,   //   общий план перед нырком (искра у фронта); тап — нырок сразу
     DRAG_FRICTION: 5,     //   инерция драга-прокрутки: затухание скорости, 1/с…
     DRAG_RUBBER: 0.12,    //   …и резинка на краях: за пределами кучи точка взгляда возвращается с такой долей за кадр
+    DRAG_LIM_R: 1.25,     //   точка взгляда не дальше стольких rad от центра стога — но не ближе, чем на высоту карты к самой дальней карте (wholeScrollLim):
+                          //   резинка края, и цель переезда камеры зажимается в этот же предел (доехали — стоим, резинка не тянет назад)
+    SWAP_Q: 0.62,         //   фейковый общий план (стог меню): нырок — на этой доле пути сцена подменяется настоящим полем под пылью; подъём — на 1−SWAP_Q
+    VEIL_IN_MS: 240,      //   пылевая вуаль подмены: набирает столько мс до момента подмены…
+    VEIL_OUT_MS: 520,     //   …и рассеивается столько после
+    VEIL_A: 0.96,         //   …пиковая непрозрачность
+    FAKE_R_MIN: 0.55,     //   радиус фейкового стога к концу (доля от полного; по корню из доли оставшихся)
+    FAKE_CRATER_R0: 0.3,  //   кратер у фронта: радиус от стольких rad при первом снятии до rad к концу, глубина — доля разобранного
+    RISE_MS: 900,         //   подъём на фейковый общий план по кнопке «вся куча» и на финале
+    CAM_COOL_MS: 600,     //   камера на плоском (wholeCamCheck): новый переезд не раньше стольких мс от старта прошлого и не поверх живого твина…
+    CAM_MS_PER_PX: 1.4,   //   …и не быстрее: длительность ≥ дистанция в px × столько мс (600 px — 840 мс; пик easeOutCubic ≈ 36 px за кадр 60 Гц)
     MELT_UP_MS: 900,      //   веха (каждые MILE): подъём на общий план столько…
     MELT_HOLD_MS: 1500,   //   …стог оседает до высоты по оставшимся картам (пружинка, пыль), «разобрано N%» — столько…
     MELT_DOWN_MS: 1100,   //   …и нырок обратно
@@ -1364,20 +1376,37 @@ function wholeFaces(S, cards){
   // ведение (только знак пула): к открытому в яме кусочку золотой (ближней стороной) или, каждые FAR_EVERY снятий / при FAR_N далёких,
   // к самому дальнему лицу (дальше VIEW_R от фронта), чтобы оно снялось и площадь ямы стянулась
   let pd = 7, pdir = 0, farN = 0, farI = -1, farD = 0, up = 0, dn = 0, fits = 0; const W = CFG.WHOLE, fr = S.front;
-  if (help) for (let i = 0; i < S.P.N; i++) if (S.zone[i] && S.alive[i] && !S.cover[i] && S.face[i] >= 0){
-    const f = S.face[i]; if (wholeIsHalf(f)) continue; const d = (wholeRank(S, i) - r0 + 13) % 13, dist = Math.hypot(S.P.x[i] - fr.x, S.P.y[i] - fr.y);
+  const cnt = new Uint8Array(13), suits = new Uint8Array(13);   // правило разнообразия поля (v48): сколько лиц ямы каждого ранга и маски их мастей
+  for (let i = 0; i < S.P.N; i++) if (S.zone[i] && S.alive[i] && !S.cover[i] && S.face[i] >= 0){
+    const f = S.face[i]; if (wholeIsHalf(f)) continue; if (f < 52){ cnt[rk(f)]++; suits[rk(f)] |= 1 << Math.floor(f / 13); } if (!help) continue;
+    const d = (wholeRank(S, i) - r0 + 13) % 13, dist = Math.hypot(S.P.x[i] - fr.x, S.P.y[i] - fr.y);
     if (dist > W.VIEW_R){ farN++; if (dist > farD){ farD = dist; farI = i; } }
     if (wholeIsPiece(f)){ const dd = Math.min(d, 13 - d); if (dd > 1 && dd < pd){ pd = dd; pdir = d <= 6 ? 1 : -1; } }
     else if (d === 2) up++; else if (d === 11) dn++;
     if (wholeFits(S, i)) fits++; }                 // подходящих лиц сейчас
   let fdir = 0; if (help && farI >= 0 && (farN >= W.FAR_N || S.removed % W.FAR_EVERY === 0)){ const d = (wholeRank(S, farI) - r0 + 13) % 13; if (d > 1 && d < 12) fdir = d <= 6 ? 1 : -1; }
-  // знак пула — один на волну (лесенка: ±1, ±2, ±3 в одну сторону играются друг за другом): ведение к кусочку / дальнему лицу,
-  // иначе — куда в яме больше лиц ранга текущей ± 2, иначе случайно
-  const lead = pdir || fdir || (up > dn ? 1 : dn > up ? -1 : (S.R() < 0.5 ? 1 : -1)), pw = C.POOL_W;
-  const pool = (first) => { const u = S.R() * (pw[0] + pw[1] + pw[2]), d = first && !fits && S.R() < C.NOFIT_P1 ? 1 : u < pw[0] ? 1 : u < pw[0] + pw[1] ? 2 : 3, sg = S.R() < C.POOL_DIR_P ? lead : -lead; return (r0 + 13 + sg * d) % 13; };
+  // Волна без повторов (v48, Андрей 03.11: «три короля, потом туз, король — ощущение, что обманывают; подыгрывать незаметно»).
+  // Ровно одна «тёплая» карта — первая: ±1 (с WARM_P1, иначе ±2; при отсутствии хода ±1 с NOFIT_P1), знак — ведение к кусочку /
+  // дальнему лицу (POOL_DIR_P), остальные — из широкого круга ±2…±WIDE_D в обе стороны. Правило разнообразия поля поверх любой схемы
+  // (и честного случая после цели): ранги волны разные; запрещён ранг, которого среди лиц ямы уже два, и ранг двух последних
+  // перевёрнутых; не выполнимо — ослабляется по порядку (нет в яме → не два последних → не третий → любой из круга). Масти в волне
+  // разные, одинаковый ранг одной масти рядом не допускается (масть — не из тех, что у этого ранга в яме)
+  const lead = pdir || fdir || (up > dn ? 1 : dn > up ? -1 : (S.R() < 0.5 ? 1 : -1));   // знак тёплой карты: ведение к кусочку / дальнему лицу, иначе куда в яме больше лиц ранга текущей ± 2, иначе случайно
+  const used = new Uint8Array(13), last = S.flips || (S.flips = []); let usedSuits = 0;
+  const tiers = [(r) => !used[r] && !cnt[r] && !last.includes(r), (r) => !used[r] && cnt[r] < 2 && !last.includes(r), (r) => !used[r] && cnt[r] < 2, (r) => !used[r], () => true];
+  const pickRank = (cand, ordered) => { for (const t of tiers){ const c = cand.filter(t); if (c.length) return ordered ? c[0] : c[Math.floor(S.R() * c.length)]; } return cand[0]; };
+  const pickSuit = (r) => { const free = (m) => { const o = []; for (let q = 0; q < 4; q++) if (!(m >> q & 1)) o.push(q); return o; };
+    let c = free(usedSuits | suits[r]); if (!c.length) c = free(usedSuits); if (!c.length) c = free(suits[r]); if (!c.length) c = [0, 1, 2, 3];
+    const q = c[Math.floor(S.R() * c.length)]; usedSuits |= 1 << q; return q; };
+  const circle = []; for (let d = 2; d <= C.WIDE_D; d++) circle.push((r0 + d) % 13, (r0 + 13 - d) % 13);
+  const any = []; for (let d = 1; d <= 12; d++) any.push((r0 + d) % 13);
   list.forEach((j, k) => {
-    if (help && !soft) S.face[j] = pool(k === 0) + suit();
-    else { let f; do f = Math.floor(S.R() * 52); while (rk(f) === r0); S.face[j] = f; }   // после цели — честный случай, не «нарочно мимо»
+    let r;
+    if (help && !soft){
+      if (k === 0){ const d = (!fits && S.R() < C.NOFIT_P1) || S.R() < C.WARM_P1 ? 1 : 2, sg = S.R() < C.POOL_DIR_P ? lead : -lead; r = pickRank([(r0 + 13 + sg * d) % 13, (r0 + 13 - sg * d) % 13], true); }   // тёплая — одна
+      else r = pickRank(circle, false);
+    } else r = pickRank(any, false);          // после цели — честный случай не ранга текущей (не «нарочно мимо»), но с правилом разнообразия
+    const q = pickSuit(r); S.face[j] = r + 13 * q; used[r] = 1; cnt[r]++; suits[r] |= 1 << q; last.push(r); if (last.length > 2) last.shift();
   });
   return all;
 }
@@ -1480,6 +1509,8 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
   const S = wholeStart(seed, coll, plain, Nsize), P = S.P, open = new Set(); let fx = 0, fy = 0, jumps = 0, sumOpen = 0, nOpen = 0, goldDraws = 0;
   const chains = [], jokAt = [], goldAt = [], spread = [], flipD = [], flipN = [], waves = [], facesBefore = [], facesAfter = [];   // spread — «площадь ямы»: средний разброс открытых в яме от центра (EMA последних снятых), на каждый ход;
   let cx = 0, cy = 0, moves2 = 0, movesAll = 0;   // flipD — расстояние от снятой до каждого перевёрнутого лица; flipN — перевёрнутых за снятие; moves2 — ходов с ≥ 2 вариантами в кадре
+  const mult = [], flipSeq = []; let mult3 = 0, ladders = 0, ladders1 = 0, waveDup = 0, wavesN2 = 0;   // ladders1 — то же с шагом ровно 1 (8-9-10)   // v48, россыпь номиналов: mult — максимальная кратность ранга среди лиц в кадре после хода; mult3 — ходов с ≥ 3 одного ранга;
+  const ladderStep = (a, b) => { const d = (b - a + 13) % 13; return d >= 1 && d <= 3 ? 1 : d >= 10 ? -1 : 0; };   // ladders — три подряд перевёрнутых ранга в одну сторону (шаг 1–3); waveDup — волн с повтором ранга
   for (let i = 0; i < P.N; i++) if (!S.cover[i] && S.zone[i]) open.add(i);
   while (!S.won && S.taps < (maxTaps || 60000)){
     sumOpen += open.size; nOpen++;
@@ -1494,6 +1525,11 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
     const facesPre = open.size - 1;             // лиц перед ходом без снятой (волна сработала при facesPre + из-под снятой ≤ WAVE_LOW)
     const r = wholeTap(S, pick); open.clear(); for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i]) open.add(i); fx = P.x[pick]; fy = P.y[pick];   // яма может и сузиться — открытые заново
     flipN.push((r.faced || []).length); for (const j of r.faced || []) flipD.push(Math.hypot(P.x[j] - P.x[pick], P.y[j] - P.y[pick]));
+    { const fresh = (r.faced || []).filter(j => S.face[j] >= 0 && S.face[j] < 52).map(j => rk(S.face[j]));   // обычные лица волны по порядку переворота
+      if (fresh.length >= 2){ wavesN2++; if (new Set(fresh).size < fresh.length) waveDup++; }
+      for (const q of fresh){ flipSeq.push(q); const L = flipSeq.length; if (L >= 3){ const s1 = ladderStep(flipSeq[L - 3], flipSeq[L - 2]), s2 = ladderStep(flipSeq[L - 2], flipSeq[L - 1]); if (s1 && s1 === s2){ ladders++; const d1 = (flipSeq[L - 2] - flipSeq[L - 3] + 13) % 13, d2 = (flipSeq[L - 1] - flipSeq[L - 2] + 13) % 13; if (d1 === d2 && (d1 === 1 || d1 === 12)) ladders1++; } } }
+      const cnt = new Uint8Array(13); let mx = 0; for (const i of open) if (Math.hypot(P.x[i] - fx, P.y[i] - fy) <= view && S.face[i] >= 0 && S.face[i] < 52){ const c = ++cnt[rk(S.face[i])]; if (c > mx) mx = c; }
+      mult.push(mx); if (mx >= 3) mult3++; }
     if (r.wave){ waves.push(r.wave); facesBefore.push(facesPre); facesAfter.push(open.size); }
     cx += (P.x[pick] - cx) * 0.2; cy += (P.y[pick] - cy) * 0.2;
     if (r.joker !== undefined) jokAt.push(S.removed / P.N); if (r.assembled !== undefined) goldAt.push(S.removed / P.N);
@@ -1502,7 +1538,8 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
   const q = (arr, k) => { const a = arr.slice().sort((x, y) => x - y); return a.length ? a[Math.min(a.length - 1, Math.floor(k * a.length))] : 0; };
   return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won, open: sumOpen / Math.max(1, nOpen), chains, jokAt, goldAt, goldDraws, best: S.best, spreadP90: q(spread, 0.9),
     flipDistP90: q(flipD, 0.9), waveMed: q(waves, 0.5), waveP10: q(waves, 0.1), waveP90: q(waves, 0.9), wavesN: waves.length, facesBeforeAvg: facesBefore.reduce((a, b) => a + b, 0) / Math.max(1, facesBefore.length), facesAfterAvg: facesAfter.reduce((a, b) => a + b, 0) / Math.max(1, facesAfter.length),
-    flipPerMoveAvg: flipN.reduce((a, b) => a + b, 0) / Math.max(1, flipN.length), choice2: moves2 / Math.max(1, movesAll), S };
+    flipPerMoveAvg: flipN.reduce((a, b) => a + b, 0) / Math.max(1, flipN.length), choice2: moves2 / Math.max(1, movesAll), S,
+    multAvg: mult.reduce((a, b) => a + b, 0) / Math.max(1, mult.length), multP90: q(mult, 0.9), mult3: mult3 / Math.max(1, mult.length), ladders: ladders / Math.max(1, flipSeq.length), ladders1: ladders1 / Math.max(1, flipSeq.length), waveDup: waveDup / Math.max(1, wavesN2) };
 }
 function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (!S.zone || S.zone[i]) && (S.whole ? wholeFits(S, i) : i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
 // бот поиска (сим): ideal — знает, где туз; dust — копает у самой сильной пыли (как человек по подсказке); random — куда попало
@@ -2521,6 +2558,7 @@ function setScenePile(P){
   // лица карт вне ямы — свои, по сиду; «открыта на старте» — ничего не лежит в полной куче
   setFaces(FACE_SEED);
   S.open0 = new Uint8Array(N); for (let i = 0; i < N; i++) S.open0[i] = P.above[i].length ? 0 : 1;
+  S.rmax = 0; for (let i = 0; i < N; i++) S.rmax = Math.max(S.rmax, Math.hypot(P.x[i], P.y[i]));   // самая дальняя карта от центра (предел прокрутки «Одного стога»)
   log('event', 'scene.pile', (lc ? 'cached ' : '') + 'n=' + N);
 }
 
@@ -2531,6 +2569,7 @@ function setScenePile(P){
 // playNode вычитает снятую карту у тех, на ком она лежала)
 function coverAll(P, alive){ const cv = new Uint16Array(P.N); for (let i = 0; i < P.N; i++){ if (!alive[i]) continue; let n = 0; for (const j of P.above[i]) if (alive[j]) n++; cv[i] = n; } return cv; }
 function refreshData(){
+  if (G.fake) return refreshFake(G.fake);
   if (G.mode === 'search' && G.srch) return refreshSearch();
   const P = SP(), a = S.aData.array, L = G.L, st = G.st, on = G.pitOn, nodeOf = G.nodeOf, alive = G.aliveNow;
   if (G.covFor !== alive || G.covDirty){ G.covNow = coverAll(P, alive); G.covFor = alive; G.covDirty = false; }
@@ -2591,6 +2630,7 @@ function fillShadows(){
   let n = 0;
   const put = (i) => { _shM.fromArray(S.mats, i * 16); e[12] += ox; e[13] -= FX.SHADOW_DROP * CFG.THICK; e[14] += oz; sm.setMatrixAt(n++, _shM); };
   const Z = G.srch;
+  if (G.fake){ sm.count = 0; sm.instanceMatrix.needsUpdate = true; return; }   // фейковый общий план — без контактных теней (сцена — стог меню, не Z.P)
   if (G.mode === 'search' && Z){
     const f = G.sfocus; G.shFill = { x: f.x, z: f.z, near: G.sz < FX.SHADOW_NEAR_SZ };
     if (G.shFill.near){
@@ -2762,23 +2802,112 @@ function wholeOverPose(){
 // G.sfocus) и вся куча (sz 1: общий план overPose во весь рост с кратером); между ними — нырок (твин) или сглаживание sz.
 // Драг — прокрутка с инерцией (G.sfocusV) и резинкой на краях; высота в игре не зависит от оседания (ys ÷ pileH)
 function wholeCam(){
+  if (G.fake){ const o = G.fakePose || (G.fakePose = wholeFakePose()); CAM.ys = o.ys; CAM.pitch = o.pitch; CAM.dist = o.dist; CAM.tx = o.tx; CAM.ty = o.ty; CAM.tz = o.tz;   // общий план — поза меню, стог крутится, как за меню
+    if (!REDUCED && G.screen === 'game') CAM.yaw += CFG.FX.MENU_SPIN * (G.fdt || 16.7) / 1000; return; }
   const P = SP(), W = CFG.WHOLE, over = G.overPose || (G.overPose = wholeOverPose()), fovV = CFG.FOV * Math.PI / 180, dClose = S.cssH / (2 * Math.tan(fovV / 2) * W.PLAY_PX);
   G.sz += (G.szTo - G.sz) * (G.szK ?? 1); const k = Math.max(0, Math.min(1, G.sz)), e = k * k * (3 - 2 * k), f = G.sfocus;
-  const lim = P.rad * 1.1, r = Math.hypot(f.x, f.z);
-  if (r > lim){ const pull = 1 - (1 - W.DRAG_RUBBER) ** ((G.fdt || 16.7) / 16.7); f.x += (f.x * lim / r - f.x) * pull; f.z += (f.z * lim / r - f.z) * pull; if (G.sfocusV){ G.sfocusV.x *= 0.5; G.sfocusV.z *= 0.5; } }   // резинка
+  const lim = wholeScrollLim(), r = Math.hypot(f.x, f.z);
+  if (r > lim && !G.sfocusTw && !camTw){ const pull = 1 - (1 - W.DRAG_RUBBER) ** ((G.fdt || 16.7) / 16.7); f.x += (f.x * lim / r - f.x) * pull; f.z += (f.z * lim / r - f.z) * pull; if (G.sfocusV){ G.sfocusV.x *= 0.5; G.sfocusV.z *= 0.5; } }   // резинка
   const ysPlay = W.PLAY_YSCALE / Math.max(0.2, G.pileH);
   CAM.ys = ysPlay + (over.ys - ysPlay) * e; CAM.pitch = W.PLAY_PITCH + (over.pitch - W.PLAY_PITCH) * e; CAM.dist = dClose * Math.pow(over.dist / dClose, e); CAM.yaw = 0;
   const tx = f.x * (1 - e), tz = f.z * (1 - e), hRaw = heightAt(tx, tz); G.hS = G.hS === null ? hRaw : G.hS + (hRaw - G.hS) * (G.szK ?? 1) * 0.6;
   CAM.tx = tx; CAM.tz = tz; CAM.ty = G.hS * CAM.ys * (1 - e) + over.ty * e;
 }
+// предел прокрутки ковра (резинка и цели переездов): не ближе DRAG_LIM_R·rad к центру и так, чтобы самую дальнюю карту стога можно было подвести к центру на высоту карты
+function wholeScrollLim(){ const P = SP(); return Math.max(P.rad * CFG.WHOLE.DRAG_LIM_R, (S.rmax || 0) - 1); }
 // поза игры (sz 0) для твина нырка — считается камерой и возвращается в CAM без следа
 function wholePlayPose(){ const keep = { ...CAM }, sz = G.sz, hS = G.hS; G.sz = 0; wholeCam(); const pose = { ...CAM, kind: 'search' }; Object.assign(CAM, keep); G.sz = sz; G.hS = hS; return pose; }
-// нырок с общего плана в игру (старт, «Продолжить», возврат с вехи): как в ямах теста — стог сдувается раньше камеры, наклон запаздывает
+// ---------- «Один стог»: общий план — фейковый стог меню (плейтест v46, Андрей 03.11: стог за меню «круто», настоящий 1 000 из синих рубашек
+// вплотную — «не круто») ----------
+// На общем плане (старт, «вся куча», веха, финал, меню при живом стоге) показывается стог меню — 10 000 карт с лицами, камера меню
+// (overPose × MENU_DIST, рыскание продолжает вращение меню), — а не настоящий стог: высота — wholeHFor по оставшимся (pileH), радиус —
+// FAKE_R_MIN…1 по корню доли оставшихся (scale x/z меша), у фронта — кратер-чаша радиусом по доле разобранного и глубиной в ту же долю.
+// Нырок: камера летит к искре на фейковом стоге по общей кривой нырка; на доле SWAP_Q пути под пылевой вуалью (fx veil, пых по кадру,
+// шлепок) сцена подменяется настоящим плоским полем с той же близкой камерой над фронтом, и камера долетает до игровой позы. Подъём
+// (веха, «вся куча», финал) — зеркально. Текст и счётчики честные, картинка фейковая.
+function fakePile(){ return endlessPile(); }
+function wholeShapeOf(Z){ return { N: Z.P.N, rad: Z.P.rad, removed: Z.removed, fx: Z.front.x, fz: Z.front.y }; }
+function wholeFakeShape(o){   // o — честные числа стога { N, rad, removed, fx, fz }; сцена уже фейковый стог (S.Y, S.maxH — его укладка)
+  const P = fakePile(), W = CFG.WHOLE, fr = Math.max(0, Math.min(1, (o.N - o.removed) / o.N)), rem = 1 - fr, k = P.rad / o.rad;
+  const rk = W.FAKE_R_MIN + (1 - W.FAKE_R_MIN) * Math.sqrt(fr), cx = o.fx * k, cz = o.fz * k, cr = rem > 0 ? P.rad * (W.FAKE_CRATER_R0 + (1 - W.FAKE_CRATER_R0) * rem) : 0;
+  const alive = new Uint8Array(P.N).fill(1), Y = S.Y, mh = S.maxH;
+  if (cr > 0) for (let i = 0; i < P.N; i++){ const d = Math.hypot(P.x[i] - cx, P.y[i] - cz); if (d < cr && Y[i] / mh > 1 - rem * (1 - (d / cr) ** 2)) alive[i] = 0; }   // чаша: в центре снята доля rem высоты, к краю — ничего
+  return { P, alive, rk, cx, cz, cr };
+}
+function wholeFakeOn(){
+  const Z = G.srch; if (!Z || !Z.whole || G.fake) return;
+  setScenePile(fakePile()); setFaces(pileFaceSeed(0)); const F = wholeFakeShape(wholeShapeOf(Z)); G.fake = F; G.fakePose = null;
+  S.mesh.scale.x = S.mesh.scale.z = F.rk; S.shMesh.scale.x = S.shMesh.scale.z = F.rk; refreshFake(F); G.sz = G.szTo = 1;
+  log('event', 'whole.fake', 'on rk=' + F.rk.toFixed(2) + ' crater=' + F.cr.toFixed(1));
+}
+function wholeFakeOff(){
+  const Z = G.srch; if (!G.fake) return; G.fake = null; G.fakePose = null;
+  S.mesh.scale.x = S.mesh.scale.z = 1; S.shMesh.scale.x = S.shMesh.scale.z = 1;
+  if (Z){ setScenePile(Z.P); G.aliveNow = Z.alive; G.covDirty = true; clearAnims(); refreshSearch(); } G.sz = G.szTo = 0; G.hS = null;
+  log('event', 'whole.fake', 'off');
+}
+// заливка фейкового стога — как стог за меню: лица по сиду, тон по числу карт сверху, открывшиеся в кратере — «земля» (шаг 5)
+function refreshFake(F){
+  const P = F.P, a = S.aData.array, cov = coverAll(P, F.alive);
+  for (let i = 0; i < P.N; i++){ const o = S.instOf[i] * 4; if (!F.alive[i]){ a[o + 3] = -1; continue; }
+    const c = cov[i], id = S.face[i]; a[o] = id; a[o + 1] = CELL_FAR0 + id;
+    if (!c && !S.open0[i]){ a[o + 2] = 0.9; a[o + 3] = 5; } else { a[o + 2] = c ? Math.max(0.5, 0.86 - 0.06 * c) : 1; a[o + 3] = 0; } }
+  S.aData.needsUpdate = true; S.shMesh.count = 0; S.shMesh.instanceMatrix.needsUpdate = true;
+}
+function fakeMaxH(){ if (S.P === fakePile()) return S.maxH; const lc = S.layCache.get(fakePile()); return lc ? lc.maxH : S.maxH; }
+// поза общего плана — камера меню: overPose фейкового стога на расстоянии меню, рыскание текущее
+function wholeFakePose(){ const o = overPose(fakePile(), fakeMaxH(), CAM.yaw); return { ...o, dist: o.dist * CFG.FX.MENU_DIST, kind: 'search' }; }
+// стог за меню при живом «Одном стоге» — та же форма, что на общем плане в игре (кратер, радиус; высота — pileHTarget)
+function menuShape(){
+  if (CFG.MODES.campaign || CFG.MODES.search || S.P !== fakePile()) return;
+  const sv = G.save.whole, Z = G.mode === 'search' && G.srch && G.srch.whole && !G.srch.won ? G.srch : null; let o = null;
+  if (Z) o = wholeShapeOf(Z);
+  else if (wholeLive()){ const P = wholePile(sv.n), last = sv.removed[sv.removed.length - 1]; o = { N: sv.n, rad: P.rad, removed: sv.removed.length, fx: P.x[last], fz: P.y[last] }; }
+  const k = o ? wholeFakeShape(o) : null;
+  if (k) for (let i = 0; i < k.P.N; i++) if (!k.alive[i]) G.aliveNow[i] = 0;
+  S.mesh.scale.x = S.mesh.scale.z = k ? k.rk : 1; S.shMesh.scale.x = S.shMesh.scale.z = k ? k.rk : 1;
+}
+// кусок кривой c на [a, b], приведённый к 0..1: обе стадии нырка и подъёма идут по одной общей кривой
+function sliceCurve(c, a, b){ const ca = c(a), cb = c(b); return (q) => cb === ca ? cl01(q) : (c(a + (b - a) * cl01(q)) - ca) / (cb - ca); }
+// подмена сцены под пылью: вуаль (fx veil) набирает VEIL_IN_MS до момента подмены; в момент — пых по кадру, тряска, шлепок
+function wholeSwapFx(atMs){ const W = CFG.WHOLE; addFx({ kind: 'veil', t0: now() + atMs - W.VEIL_IN_MS, dur: W.VEIL_IN_MS + W.VEIL_OUT_MS, info: 'swap' }); }
+function wholeSwapNow(fn){ const t = now(), W = CFG.WHOLE; fn();
+  const y0 = safeT / scale + HEADER_H, y1 = trayTop();
+  for (let i = 0; i < 10; i++){ const R = mulberry32(i * 7 + 3); spawn('puff', 3, VW * (0.15 + 0.7 * R()), y0 + (y1 - y0) * (0.1 + 0.8 * R()), { life: W.VEIL_OUT_MS * 1.3 }, i * 31 + Math.round(t)); }
+  shake({ dur: 300, amp: 1.6, peak: 60, hz: 12 }, 'swap'); Audio.settle(0.5); log('event', 'whole.swap', G.fake ? 'fake' : 'real'); }
+// подъём с плоского поля на фейковый общий план (веха, «вся куча», финал): стадия A — отъезд в настоящем поле на долю 1−SWAP_Q общей
+// кривой, подмена под пылью, стадия B — долёт к позе меню над фейковым стогом. name — имя твина в журнале, done — по прибытии
+function wholeRise(ms, name, done){
+  const W = CFG.WHOLE, q1 = 1 - W.SWAP_Q;
+  if (G.sfocusTw){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); } G.sfocusV = null;
+  if (G.fake){ if (done) done(); return; }
+  const o = overPose(fakePile(), fakeMaxH(), CAM.yaw); o.dist *= CFG.FX.MENU_DIST;
+  const a = { ...CAM }, ysC = ysOut(a.ys, o.ys), cv = { dist: easeInOutQuint, pitch: easeIO, ys: ysC }, at = (k, q) => a[k] + (o[k] - a[k]) * cv[k](q);
+  const poseA = { tx: a.tx, tz: a.tz, ty: a.ty, dist: at('dist', q1), pitch: at('pitch', q1), ys: at('ys', q1), yaw: a.yaw, kind: 'search' };
+  wholeSwapFx(ms * q1);
+  tweenCam(poseA, ms * q1, name, () => {
+    wholeSwapNow(() => wholeFakeOn()); const F = G.fake;
+    CAM.tx = F.cx * F.rk; CAM.tz = F.cz * F.rk; CAM.ty = heightAt(F.cx, F.cz) * CAM.ys;   // та же близкая камера — над кратером фейкового стога
+    tweenCam({ ...o, yaw: CAM.yaw, kind: 'search' }, ms * (1 - q1), name, () => { G.fakePose = null; if (done) done(); },
+      { dist: sliceCurve(easeInOutQuint, q1, 1), pitch: sliceCurve(easeIO, q1, 1), ys: sliceCurve(ysC, q1, 1), ysTrack: true, tx: easeIO, tz: easeIO });
+  }, { dist: sliceCurve(easeInOutQuint, 0, q1), pitch: sliceCurve(easeIO, 0, q1), ys: sliceCurve(ysC, 0, q1), ysTrack: true });
+}
+// нырок с общего плана в игру (старт, «Продолжить», возврат с вехи, «вся куча» обратно): как в ямах теста — стог сдувается раньше
+// камеры, наклон запаздывает; с фейкового стога — двумя стадиями с подменой сцены на SWAP_Q (см. выше)
 function wholeDive(ms, done){
-  const FX = CFG.FX; G.phase = 'dive'; G.diveAt = now(); tip(''); Audio.whoosh();
-  const ph = wholePlayPose(), dv = { dist: easeInOutQuint, ys: ysIn(CAM.ys, ph.ys), ysTrack: true, pitch: (q) => easeInOutSine(Math.max(0, (q - FX.DIVE_PITCH_LAG) / (1 - FX.DIVE_PITCH_LAG))) };
-  G.szTo = 0; log('event', 'whole.dive');
-  tweenCam(ph, ms || CFG.DIVE_MS, 'dive', () => { G.sz = 0; G.phase = 'play'; G.lastInput = now(); buzz('diveEnd'); if (done) done(); }, dv);
+  const FX = CFG.FX, W = CFG.WHOLE; ms = ms || CFG.DIVE_MS; G.phase = 'dive'; G.diveAt = now(); G.diveMs = ms; G.diveStage = 1; tip(''); Audio.whoosh(); G.szTo = 0; log('event', 'whole.dive', G.fake ? 'fake' : '');
+  const finish = () => { G.sz = G.szTo = 0; G.phase = 'play'; G.diveMs = 0; G.lastInput = now(); buzz('diveEnd'); if (done) done(); if (G.srch && G.srch.whole) wholeCamCheck(now(), 'after'); };   // нырнули, а хода в кадре нет (после вехи) — к ближайшему
+  const pitchC = (q) => easeInOutSine(Math.max(0, (q - FX.DIVE_PITCH_LAG) / (1 - FX.DIVE_PITCH_LAG)));
+  if (!G.fake){ const ph = wholePlayPose(); tweenCam(ph, ms, 'dive', finish, { dist: easeInOutQuint, ys: ysIn(CAM.ys, ph.ys), ysTrack: true, pitch: pitchC }); return; }
+  const q1 = W.SWAP_Q, F = G.fake, a = { ...CAM }, fovV = CFG.FOV * Math.PI / 180;
+  const play = { dist: S.cssH / (2 * Math.tan(fovV / 2) * W.PLAY_PX) * G.chainZoomK, pitch: W.PLAY_PITCH, ys: W.PLAY_YSCALE / Math.max(0.2, G.pileH) };   // игровая поза без сцены (как wholeCam)
+  const ysC = ysIn(a.ys, play.ys), cv = { dist: easeInOutQuint, pitch: pitchC, ys: ysC }, at = (k, q) => a[k] + (play[k] - a[k]) * cv[k](q);
+  const poseA = { tx: F.cx * F.rk, tz: F.cz * F.rk, ty: heightAt(F.cx, F.cz) * at('ys', q1), dist: at('dist', q1), pitch: at('pitch', q1), ys: at('ys', q1), yaw: 0, kind: 'search' };
+  wholeSwapFx(ms * q1);
+  tweenCam(poseA, ms * q1, 'dive', () => {
+    wholeSwapNow(() => wholeFakeOff()); G.diveStage = 2; const ph = wholePlayPose(); CAM.tx = ph.tx; CAM.tz = ph.tz; CAM.ty = heightAt(ph.tx, ph.tz) * CAM.ys; CAM.yaw = 0;   // та же близкая камера — над фронтом настоящего поля
+    tweenCam(ph, ms * (1 - q1), 'dive', finish, { dist: sliceCurve(easeInOutQuint, q1, 1), pitch: sliceCurve(pitchC, q1, 1), ys: sliceCurve(ysC, q1, 1), ysTrack: true });
+  }, { dist: sliceCurve(easeInOutQuint, 0, q1), pitch: sliceCurve(pitchC, 0, q1), ys: sliceCurve(ysC, 0, q1), ysTrack: true, tx: easeIO, tz: easeIO });
 }
 // веха «Одного стога» (каждые MILE): подъём на общий план, стог оседает до высоты по оставшимся (пружинка, пыль), «разобрано N%», нырок обратно
 function wholeHFor(left, N){ const W = CFG.WHOLE; return W.H_MIN + (1 - W.H_MIN) * Math.max(0, Math.min(1, left / Math.max(1, N))); }   // линейно: каждая веха — заметная ступень
@@ -2786,8 +2915,7 @@ function wholeMelt(t, pct, left){
   const W = CFG.WHOLE, Z = G.srch; G.phase = 'melt'; tip('');
   G.melt = { t0: t, pct, left, hFrom: G.pileH, hTo: wholeHFor(left, Z.P.N), puffed: false, down: 0 }; G.wholeH = G.melt.hTo;
   addFx({ kind: 'whole.melt', t0: t, dur: W.MELT_UP_MS + W.MELT_HOLD_MS + W.MELT_DOWN_MS, info: pct + '%' }); Audio.rise(); Audio.shrink(W.MELT_UP_MS / 1000);
-  G.overPose = null; const oh = wholeOverPose();   // поза — по габаритам стога после вехи (pileH уже hTo? нет — hFrom; кадр с запасом)
-  tweenCam(oh, W.MELT_UP_MS, 'melt.up', () => { G.sz = G.szTo = 1; G.melt.holdAt = now(); }, { ys: ysOut(CAM.ys, oh.ys), ysTrack: true });
+  wholeRise(W.MELT_UP_MS, 'melt.up', () => { G.sz = G.szTo = 1; if (G.melt) G.melt.holdAt = now(); });   // подъём на фейковый общий план (подмена под пылью), там стог оседает
 }
 function heightAt(x, z){ const i = Math.floor((x + S.hfExt) / CFG.HF_RES), j = Math.floor((z + S.hfExt) / CFG.HF_RES); return (i < 0 || j < 0 || i >= S.hfG || j >= S.hfG) ? 0 : S.hf[j * S.hfG + i]; }
 function pxuNow(){ return S.cssH / (2 * Math.tan(CFG.FOV * Math.PI / 360) * CAM.dist); }
@@ -2877,7 +3005,8 @@ const _haloT = new THREE.Matrix4().makeTranslation(0, CFG.FX.HALO_LIFT * CFG.THI
 const _v = new THREE.Vector3(), _ray = new THREE.Raycaster(), _ndc = new THREE.Vector2();
 function worldPt(i, lx, lz){
   const e = S.mats, o = i * 16;
-  return _v.set(e[o] * lx + e[o + 8] * lz + e[o + 12], (e[o + 1] * lx + e[o + 9] * lz + e[o + 13]) * S.ys, e[o + 2] * lx + e[o + 10] * lz + e[o + 14]);
+  const k = S.mesh ? S.mesh.scale.x : 1;      // радиус фейкового стога — масштаб меша по x/z
+  return _v.set((e[o] * lx + e[o + 8] * lz + e[o + 12]) * k, (e[o + 1] * lx + e[o + 9] * lz + e[o + 13]) * S.ys, (e[o + 2] * lx + e[o + 10] * lz + e[o + 14]) * k);
 }
 function toScreen(v){ v.project(S.camera); return { x: (v.x + 1) / 2 * S.cssW, y: (1 - v.y) / 2 * S.cssH, z: v.z }; }
 function cardQuad(i){                      // углы карты на экране, CSS px: верх-лево, верх-право, низ-право, низ-лево
@@ -2886,6 +3015,7 @@ function cardQuad(i){                      // углы карты на экра�
 }
 function cardCenter(i){ return toScreen(worldPt(i, 0, 0)); }
 function pickCard(px, py){                 // px, py — CSS px от левого верхнего угла канваса; → карта стога или −1
+  if (G.fake) return -1;                      // фейковый общий план: сцена — стог меню, тапать нечего (тап — нырок)
   const P = SP(), alive = G.aliveNow;
   _ndc.set(px / S.cssW * 2 - 1, -(py / S.cssH) * 2 + 1); _ray.setFromCamera(_ndc, S.camera);
   const o = _ray.ray.origin.clone(), d = _ray.ray.direction.clone(); o.y /= S.ys; d.y /= S.ys;
@@ -3015,7 +3145,8 @@ function startEndless(){
 // стог осел: пыль по подножию (передняя половина круга в кадре), лёгкая тряска 3D-слоя, глухой «ух» под шорох
 function pileSettleFx(t, dh){
   const P = SP(), n = 18, k = Math.min(1, dh * 10);
-  for (let i = 0; i < n; i++){ const a = Math.PI * 2 * i / n, p = toScreen(new THREE.Vector3(Math.sin(a) * P.rad * 0.95, 0, Math.cos(a) * P.rad * 0.95));
+  const rs = P.rad * 0.95 * (S.mesh ? S.mesh.scale.x : 1);   // подножие фейкового стога — по его радиусу
+  for (let i = 0; i < n; i++){ const a = Math.PI * 2 * i / n, p = toScreen(new THREE.Vector3(Math.sin(a) * rs, 0, Math.cos(a) * rs));
     if (p.z < 1) spawn('puff', 2, p.x / scale, p.y / scale, { life: CFG.FX.PUFF_MS * 1.6 }, i * 31 + Math.round(t)); }
   shake({ dur: 420, amp: 1.2 + 1.8 * k, peak: 90, hz: 11 }, 'pile.settle'); Audio.settle(k);
 }
@@ -3025,6 +3156,7 @@ function pileHTarget(){
   if (G.mode === 'endless' && G.run) return pileHFor(endlessLeft(), G.run.shown);
   if (G.mode === 'search' && G.srch && G.srch.whole) return G.wholeH || 1;   // «Один стог»: высота по оставшимся на последней вехе (таяние, wholeHFor)
   if (G.mode === 'search' || CFG.MODES.campaign) return 1;
+  if (!CFG.MODES.search && wholeLive()){ const sv = G.save.whole; return wholeHFor(sv.n - sv.removed.length - (sv.n - sv.removed.length) % Math.round(sv.n * CFG.WHOLE.MILE), sv.n); }   // за меню — стог «Одного стога», как на его общем плане
   const ep = G.save.endless.pile, sp = endlessSpec(ep ? ep.k : 0); return pileHFor(sp.shown - (ep && ep.fake || 0), sp.shown);
 }
 // сколько карт в куче показываем (фейк: убыль за яму — endlessFake)
@@ -3333,7 +3465,7 @@ function endEndless(why){
 function bankRun(why){ const r = G.run; if (G.mode !== 'endless' || !r || r.over) return; endlessSave(); dropPreview(); r.over = true; const E = G.save.endless; E.aces += r.aces; if (r.aces > E.best) E.best = r.aces; save(); log('event', 'endless.over', 'aces=' + r.aces + ' why=' + why); }
 // уход из текущего режима: забег засчитывается, победа в яме, взятая под меню, записывается
 // (тряска и подсказки прежней сцены не переходят в новую; новый режим ставит камеру сам — к общему плану до меню не возвращаемся)
-function leaveMode(why){ if (G.mode === 'search' && G.srch) searchSave(true); bankRun(why); if (S.faceSeed !== FACE_SEED && S.P) setFaces(FACE_SEED); G.shake = null; G.homeBeforeMenu = null; G.shrink = null; G.pileIntro = null; G.pileMove = null; setGoldSkin('gold'); tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
+function leaveMode(why){ if (G.mode === 'search' && G.srch) searchSave(true); G.fake = null; G.fakePose = null; G.diveMs = 0; if (S.mesh){ S.mesh.scale.x = S.mesh.scale.z = 1; S.shMesh.scale.x = S.shMesh.scale.z = 1; } bankRun(why); if (S.faceSeed !== FACE_SEED && S.P) setFaces(FACE_SEED); G.shake = null; G.homeBeforeMenu = null; G.shrink = null; G.pileIntro = null; G.pileMove = null; setGoldSkin('gold'); tip(''); if (G.mode === 'campaign' && G.phase === 'won' && G.L){ G.phase = 'idle'; finishLevelData(); } }
 function goalTip(){ const og = G.goalShown === null ? Math.max(0, onGold(G.st)) : G.goalShown, j = G.L && G.L.joker; return og ? 'Сними с ' + (j ? 'джокера' : 'туза') + ' ещё ' + og + ' ' + plural(og, 'карту', 'карты', 'карт') : (j ? 'Джокер' : 'Туз') + ' открыт — возьми его с K или 2'; }
 function playNode(q, how){
   const L = G.L, st = G.st, i = L.nodes[q], wild = !!G.wildArmed && G.mode === 'endless';
@@ -3993,9 +4125,13 @@ function drawGlint(c, t){
 }
 // «Один стог», общий план: искра у фронта (где продолжится разбор) — столб света и звёздочки, как у ямы теста; на нырке столб схлопывается
 function drawWholeSpark(c, t){
-  const Z = G.srch, f = Z.front, P = Z.P; let b = -1, bd = 1e9;   // точка искры — верх ближайшей к фронту живой открытой карты (карта высот — исходная, а верх уже снят)
-  for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i]){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.y); if (d < bd){ bd = d; b = i; } }
-  const p = b >= 0 ? cardCenter(b) : toScreen(new THREE.Vector3(f.x, heightAt(f.x, f.y) * S.ys, f.y)); if (p.z > 1) return;
+  const Z = G.srch, f = Z.front, P = Z.P; let b = -1, bd = 1e9, p;   // точка искры — верх ближайшей к фронту живой открытой карты (карта высот — исходная, а верх уже снят)
+  if (G.fake){ const F = G.fake, Pf = F.P; let by = -1;   // фейковый стог: самая высокая живая карта у центра кратера (дно чаши), иначе ближайшая
+    for (let i = 0; i < Pf.N; i++) if (F.alive[i]){ const d = Math.hypot(Pf.x[i] - F.cx, Pf.y[i] - F.cz); if (d < 0.7){ if (S.Y[i] > by){ by = S.Y[i]; b = i; } } else if (by < 0 && d < bd){ bd = d; b = i; } }
+    p = b >= 0 ? cardCenter(b) : toScreen(new THREE.Vector3(F.cx * F.rk, heightAt(F.cx, F.cz) * S.ys, F.cz * F.rk)); }
+  else { for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i]){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.y); if (d < bd){ bd = d; b = i; } }
+    p = b >= 0 ? cardCenter(b) : toScreen(new THREE.Vector3(f.x, heightAt(f.x, f.y) * S.ys, f.y)); }
+  if (p.z > 1) return;
   const x = p.x / scale, y = p.y / scale, FX = CFG.FX, dk = G.phase === 'dive' ? (t - G.diveAt) / FX.PILLAR_DIVE_MS : 0; if (dk >= 1) return;
   const sq = 1 - easeOutCubic(Math.max(0, dk)), pw = (15 + 5 * Math.sin(2 * Math.PI * t / FX.PILLAR_MS)) * sq, ph = FX.PILLAR_H, k = 0.5 + 0.5 * Math.sin(t / 260);
   glow(c, GLOW.gold, x, y, 32 * (0.4 + 0.6 * sq), 0.35, 11);
@@ -4004,6 +4140,13 @@ function drawWholeSpark(c, t){
     c.globalAlpha = 0.9 * Math.sin(Math.PI * u) * sq; c.drawImage(STAR, x + dx - sz / 2, y - h0 - 40 * u - sz / 2, sz, sz); }
   c.restore(); glow(c, GLOW.warm, x, y, 1.4 * (14 + 10 * k) * sq, 0.9 * sq);
   c.save(); c.globalAlpha = sq; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round'; const ly = y - ph - 16 >= safeT + HEADER_H + 14 ? y - ph - 16 : y + 30; outlined(c, Z.removed ? 'продолжаем здесь' : 'начинаем с верхушки', x, ly, '800 14px ' + FONT, PAL.cream, 4); c.restore();   // над искрой, а нет места — под ней
+}
+// пылевая вуаль подмены сцены (нырок / подъём «Одного стога»): набирает VEIL_IN_MS, пик в момент подмены, рассеивается VEIL_OUT_MS
+function drawVeil(c, f, t){
+  const W = CFG.WHOLE, u = t - f.t0; if (u < 0 || u > f.dur) return;
+  const a = u < W.VEIL_IN_MS ? easeInCubic(u / W.VEIL_IN_MS) : 1 - easeOutCubic((u - W.VEIL_IN_MS) / W.VEIL_OUT_MS);
+  const g = c.createRadialGradient(VW / 2, H * 0.45, 20, VW / 2, H * 0.45, H * 0.72); g.addColorStop(0, 'rgba(228,206,162,1)'); g.addColorStop(0.55, 'rgba(208,186,142,0.94)'); g.addColorStop(1, 'rgba(164,144,104,0.8)');
+  c.save(); c.globalAlpha = W.VEIL_A * a; c.fillStyle = g; c.fillRect(0, 0, VW, H); c.restore();
 }
 // веха «Одного стога»: над общим планом — «разобрано N%», осталось карт, полоса
 function drawMelt(c, t){
@@ -4284,10 +4427,11 @@ function renderUI(t){
   if (G.screen !== 'game' && G.screen !== 'offer' && G.screen !== 'win') return;
   if (G.headK > 0.01){ c.save(); c.globalAlpha = Math.min(1, G.headK); c.drawImage(HEAD_BG, 0, 0, VW, HEAD_BG.vh); c.restore(); }   // подложка шапки — первой
   if (G.L && (G.phase === 'over' || G.phase === 'dive')) drawSpark(c, t);
-  if (G.mode === 'search' && G.srch && G.srch.whole && (G.phase === 'over' || G.phase === 'dive') && !G.melt) drawWholeSpark(c, t);
+  if (G.mode === 'search' && G.srch && G.srch.whole && (G.phase === 'over' || G.phase === 'dive') && !G.melt && G.fake) drawWholeSpark(c, t);
   if (G.melt) drawMelt(c, t);
   if (G.mode === 'search') drawGlint(c, t);
   for (const f of G.fx) if ((f.kind === 'fly' || f.kind === 'deal' || f.kind === 'golddraw') && !f.landed && t >= f.t0 + f.dur) land(f, t);   // посадка — до отбоя: в кадре посадки стопка уже сдвинута
+  for (const f of G.fx) if (f.kind === 'veil') drawVeil(c, f, t);   // пылевая вуаль подмены сцены — под панелью
   if (G.trayK > 0.01 && ((G.L && G.st) || (G.mode === 'search' && G.srch))) drawTray(c, t);
   drawFx(c, t);
   drawParticles(c, t);
@@ -4428,6 +4572,9 @@ function goto(screen){
       if (G.phase === 'won'){ for (const f of G.fx) if (f.kind === 'goldfly') f.dur = Math.max(f.dur, G.phaseUntil - f.t0); if (G.goldRect) G.goldRect.at = Math.max(G.goldRect.at, now()); } }
     return;
   }
+  if (screen === 'menu' && G.mode === 'search' && G.srch && G.srch.whole && !G.fake && !G.srch.won){   // из игры в меню: за листом — фейковый общий план (как на старте)
+    camTw = null; G.melt = null; G.meltPending = null; G.diveMs = 0; if (G.sfocusTw){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); } G.sfocusV = null;
+    G.phase = 'over'; G.phaseUntil = 1e18; wholeFakeOn(); Object.assign(CAM, wholeFakePose()); }
   if (screen === 'menu'){                       // нижний лист: главная кнопка, две плитки режимов, строка ссылок (кнопки — по menuModel)
     const M = menuModel(), N = LEVELS.length, lvl = Math.min(G.save.level, N - 1), done = G.save.level >= N, best = G.save.endless.best, aces = G.run ? G.run.aces : 0;
     const warn = M.lose ? `<small class="warn">${M.lose.replace(/^ · /, '')}</small>` : '';
@@ -4595,7 +4742,7 @@ function resetProgress(){
   G.save.endless.pile = null; G.save.endless.piles = 0; G.save.endless.pitsTotal = 0; G.save.endless.charges = {};   // и куча забега (урок второй раз не показывается)
   Object.assign(G.save.whole, { seed: 0, removed: [], faces: null, wins: 0, jokers: 0, bestStreak: 0, elapsed: 0 }); G.save.gold.cards = []; save();   // и стог с коллекцией золотых
   G.L = null; G.st = null; G.nodeOf = null; G.pitOn = false; G.phase = 'idle'; dropFx(); G.offer = null; G.shrink = null; tip('');
-  G.aliveNow = aliveFromSave(); clearAnims(); refreshData(); const U = S.mesh.material.uniforms; U.uDim.value = 0; U.uFaceRot.value = 0; S.faceRot = 0;
+  G.aliveNow = aliveFromSave(); menuShape(); clearAnims(); refreshData(); const U = S.mesh.material.uniforms; U.uDim.value = 0; U.uFaceRot.value = 0; S.faceRot = 0;
   const h = overHome(0); Object.assign(CAM, h); home = { ...h }; camTw = null; spin = null; zoom = 1; hud();
   log('event', 'reset');
 }
@@ -4691,6 +4838,7 @@ gameEl.addEventListener('pointermove', (e) => {
   if (!down.moved && Math.hypot(e.clientX - down.x, e.clientY - down.y) > CFG.TAP_SLOP_PX){ down.moved = true; hideLoupe(); }
   if (down.moved && G.mode === 'search'){   // поиск: палец тянет кучу (сдвиг, а не поворот); довод к тузу не спорит с пальцем
     if (down.zoomBtn) return;
+    if (G.srch && G.srch.whole && (G.phase !== 'play' || camTw)){ G.sfocusV = null; return; }   // «Один стог»: на общем плане и в нырке ковёр не тянется
     if (G.sfocusTw){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); }
     const k = pxuNow(), dx = e.clientX - down.lx, dy = e.clientY - down.ly, t = now(), dt = Math.max(1, t - down.lt); down.lx = e.clientX; down.ly = e.clientY; down.lt = t;
     const mx = -dx / k, mz = -dy / (k * Math.sin(CAM.pitch)); G.sfocus.x += mx; G.sfocus.z += mz; G.sfocusV = null;
@@ -4765,9 +4913,11 @@ function nearQuads(Q0, quads, max){
 // ---------- «Иголка в стоге»: тап, колода, находка ----------
 function searchTapAt(p){
   const Z = G.srch; if (!Z || Z.won) return;
-  if (G.phase === 'over' && Z.whole){ log('input', 'tap.over'); wholeDive(); return; }   // тап на общем плане — нырок сразу
+  if (G.phase === 'over' && Z.whole){ if (camTw) return; log('input', 'tap.over'); wholeDive(); return; }   // тап на общем плане — нырок сразу (подъём ещё идёт — ждём)
   if (G.phase !== 'play') return;
-  if (zoomAllHit(p)){ G.szTo = G.szTo >= 0.9 ? (Z.whole ? 0 : 0.12) : 1; G.zoomAllUsed = true; if (Z.whole && G.szTo === 1) G.overPose = null; log('input', 'search.zoomall', 'sz=' + G.szTo); return; }   // «вся куча» и обратно — к той же точке
+  if (zoomAllHit(p)){ G.zoomAllUsed = true;
+    if (Z.whole){ if (camTw) return; G.phase = 'over'; G.phaseUntil = 1e18; log('input', 'search.zoomall', 'rise'); wholeRise(CFG.WHOLE.RISE_MS, 'rise'); return; }   // «вся куча»: подъём на фейковый общий план; обратно — тапом (нырок)
+    G.szTo = G.szTo >= 0.9 ? 0.12 : 1; log('input', 'search.zoomall', 'sz=' + G.szTo); return; }   // поиск: «вся куча» и обратно — к той же точке
   if (Z.whole && G.trayK > 0.5) for (const r of abilityRects()) if (inRect(p, r, 8)){ useAbility(r.J.id); return; }
   if (Z.whole && inRect(p, goldHome(), 10)){ Audio.ui(); log('input', 'gold.slot'); searchSave(true); goto('album'); return; }   // мини-карта золотой — альбом
   if (inTray(p)){ if (inRect(p, deckGeo(), 10)) searchDeck(); return; }
@@ -4886,19 +5036,32 @@ function wholeAfterTap(t){
   if (m > G.wholeMile){ G.wholeMile = m; const pct = Math.round(m * W.MILE * 100);
     coins(W.MILE_COINS, VW / 2, H * 0.32, 'разобрано ' + pct + '%', { rain: true, t0: t + W.MELT_UP_MS }); log('event', 'whole.mile', pct + '%');
     if (!Z.won && pct < 100){ G.meltPending = { pct, left: P.N - Z.removed }; } }   // веха: подъём, стог оседает, нырок обратно — когда отыграют сборки (tick)
-  if (pxuNow() < 34) return;
-  const fr = Z.front, f = G.sfocus;             // окно ямы — вокруг фронта: камера держит фронт в кадре (довод, когда уехал дальше полуокна)
-  if (fr && Math.hypot(fr.x - f.x, fr.y - f.z) > CFG.WHOLE.VIEW_R * 0.5 && !down){ G.sfocusTw = { from: { ...f }, to: { x: fr.x, z: fr.y }, t0: t + 150, ms: REDUCED ? 1 : CFG.FX.SEARCH_FIND_MS }; log('fx.start', 'cam.sfocus', 'whole.front'); return; }
-  if (wholeInView().some(i => wholeFits(Z, i))) return;   // в кадре есть ход — стоим; нет — к ближайшему подходящему лицу (или любому лицу)
-  let b = -1, bd = 1e9;
-  for (const fit of [true, false]){ for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i] && Z.zone[i] && (!fit || wholeFits(Z, i))){ const d = Math.hypot(P.x[i] - f.x, P.y[i] - f.z); if (d < bd){ bd = d; b = i; } } if (b >= 0) break; }
-  if (b < 0) return;
-  G.sfocusTw = { from: { ...f }, to: { x: P.x[b], z: P.y[b] }, t0: t + 300, ms: REDUCED ? 1 : CFG.FX.SEARCH_FIND_MS }; log('fx.start', 'cam.sfocus', 'whole.next');
+  wholeCamCheck(t);
+}
+// Камера «Одного стога» на плоском — один двигатель (плейтест v46, Андрей 03.11: «камеру куда-то дёргает периодически»). Было два:
+// довод фронта (EMA снятых) после каждого тапа и переезд к подходящему лицу, когда в кадре нет хода; каждый стартовал поверх живого
+// твина другого, и камера ходила туда-сюда фронт ↔ ход на каждом тапе (стенд qa/cam.mjs: 34 переезда на 150 тапов, 17 перебиваний).
+// Теперь: цель одна за раз — в кадре нет хода → ближайшее подходящее лицо (или любое лицо); ход в кадре есть → довод фронта, только
+// если фронт уехал дальше полуокна И у фронта есть подходящее лицо (иначе довод увёл бы от хода — пинг-понг). Не стартует при пальце
+// на экране, живой инерции прокрутки и живом твине (кулдаун CAM_COOL_MS от старта прошлого); твин всегда от текущей точки взгляда,
+// длительность — по дистанции (не быстрее CAM_MS_PER_PX), повтор проверки — когда твин кончился (tick)
+function wholeCamCheck(t, why){
+  const Z = G.srch, P = Z.P, W = CFG.WHOLE, f = G.sfocus; if (!Z.whole || Z.won || G.phase !== 'play' || pxuNow() < 34) return;
+  if (down || G.sfocusV || G.sfocusTw || t - (G.sfocusAt || -1e9) < W.CAM_COOL_MS) return;
+  const nearest = (x, z, fitOnly) => { let b = -1, bd = 1e9; for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i] && Z.zone[i] && (!fitOnly || wholeFits(Z, i))){ const d = Math.hypot(P.x[i] - x, P.y[i] - z); if (d < bd){ bd = d; b = i; } } return [b, bd]; };
+  let to = null, kind = '';
+  if (!wholeInView().some(i => wholeFits(Z, i))){ let [b] = nearest(f.x, f.z, true); if (b < 0) [b] = nearest(f.x, f.z, false); if (b < 0) return; to = { x: P.x[b], z: P.y[b] }; kind = 'whole.next'; }
+  else { const fr = Z.front;   // довод фронта — только сразу после тапа, не вторым переездом
+    if (why === 'after' || !fr || Math.hypot(fr.x - f.x, fr.y - f.z) <= W.VIEW_R * 0.5) return; const [, d] = nearest(fr.x, fr.y, true); if (d > W.VIEW_R * 0.5) return; to = { x: fr.x, z: fr.y }; kind = 'whole.front'; }
+  { const lim = wholeScrollLim(), r = Math.hypot(to.x, to.z); if (r > lim){ to.x *= lim / r; to.z *= lim / r; } }   // цель — в пределах резинки края: доехали — и стоим, резинка назад не тянет
+  const px = Math.hypot(to.x - f.x, to.z - f.z) * pxuNow(); if (px < 24) return;   // мёртвая зона: короче полкарты — не ездим
+  G.sfocusTw = { from: { x: f.x, z: f.z }, to, t0: t + 150, ms: REDUCED ? 1 : Math.max(CFG.FX.SEARCH_FIND_MS, px * W.CAM_MS_PER_PX) }; G.sfocusAt = t;
+  log('fx.start', 'cam.sfocus', kind + (why ? ' ' + why : '') + ' px=' + Math.round(px));
 }
 function wholeWin(quad){
-  const Z = G.srch, t = now(), sv = G.save.whole; G.phase = 'won'; G.phaseUntil = t + CFG.FX.SEARCH_WIN_MS; G.melt = null; camTw = null; G.wholeH = CFG.WHOLE.H_MIN;
+  const Z = G.srch, t = now(), sv = G.save.whole; G.phase = 'won'; G.phaseUntil = t + CFG.FX.SEARCH_WIN_MS; G.melt = null; camTw = null; G.wholeH = 0.02;   // финал — луг без стога
   if (G.sfocusTw){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); }
-  G.szTo = 1; aceTaken(quad, t); confetti(sv.runs * 7 + 3, t + CFG.FX.FREEZE_MS, 2400);
+  wholeRise(CFG.WHOLE.RISE_MS, 'rise'); aceTaken(quad, t); confetti(sv.runs * 7 + 3, t + CFG.FX.FREEZE_MS, 2400);
   coins(CFG.WHOLE.COIN_DONE, VW / 2, H * 0.32, 'стог разобран', { rain: true, t0: t + CFG.FX.FREEZE_MS });
   const ms = Math.round(G.srchElapsed); sv.lastMs = ms; sv.lastTaps = Z.taps; sv.lastDraws = Z.draws; sv.wins = (sv.wins || 0) + 1;
   sv.lastBest = Z.best; sv.bestStreak = Math.max(sv.bestStreak || 0, Z.best); sv.lastGolds = Z.golds.filter(g => g.got >= CFG.GOLD.PIECES).map(g => g.id); sv.lastJokers = Z.jok.filter(j => j.got >= 2).map(j => CFG.JOKERS[j.k].id);
@@ -4969,11 +5132,13 @@ function startSearch(k, whole){
   G.glintCov = null; G.glintSeenAt = G.glintStepAt = -1e9; G.srchNearAt = 0;
   G.aliveNow = Z.alive; clearAnims(); refreshData(); perf('start.refresh', 'touchGraph+tones'); S.mesh.material.uniforms.uDim.value = 0; S.mesh.material.uniforms.uFaceRot.value = 0; S.faceRot = 0;
   G.sz = Z.removed ? 0.3 : 1; G.szTo = G.sz; G.sfocus = { x: 0, z: 0 }; G.sfocusV = null; G.melt = null; G.meltPending = null;
-  if (whole){ G.overPose = null; G.sz = G.szTo = 1; G.sfocus = { x: Z.front.x, z: Z.front.y }; G.wholeH = wholeHFor(P.N - Z.removed - (P.N - Z.removed) % Math.round(P.N * CFG.WHOLE.MILE), P.N); G.pileH = G.wholeH; }   // высота — по последней вехе   // общий план во весь рост (осевший по оставшимся), искра у фронта, нырок — wholeDive G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;
+  if (whole){ G.overPose = null; G.sz = G.szTo = 1; G.sfocus = { x: Z.front.x, z: Z.front.y }; G.wholeH = wholeHFor(P.N - Z.removed - (P.N - Z.removed) % Math.round(P.N * CFG.WHOLE.MILE), P.N); G.pileH = G.wholeH; }   // высота — по последней вехе; общий план — фейковый стог меню (wholeFakeOn ниже), искра у фронта, нырок — wholeDive
+  G.sfocusTw = null; camTw = null; spin = null; home = { kind: 'search' }; G.heatVal = 0; G.heatLevel = 0; G.heatRungLv = 0; G.heatRungAt = -1e9;   // (до v47 эта строка была в комментарии: home оставался «over» меню, и menuCamBack двигал камеру)
   G.phase = whole ? 'over' : 'play'; if (whole){ G.overAt = now(); G.phaseUntil = G.overAt + CFG.WHOLE.OVER_SHOW_MS; } goto('game'); save();
   G.wholeTut = whole && !G.save.seen.wholeTut && !Z.removed ? 1 : 0;   // урок на первых ходах (коротко: снимай ±1, держи серию)
   G.chainZoomK = 1; G.heatK = 0; G.heatPt = { x: 0, z: 0 }; G.chainBreakAt = -1e9; G.hS = null;
   tip(whole ? '' : Z.removed ? 'Продолжаем поиск' : 'Один золотой туз. Тапни кучу — ближе', 6000);
+  if (whole){ wholeFakeOn(); G.homeBeforeMenu = null; }   // общий план — фейковый стог меню (та же сцена и камера, что за меню: шва на старте нет)
   hud(); perf('start.done'); log('event', whole ? 'whole.start' : 'search.start', 'pile=' + (k + 1) + ' n=' + P.N + ' resumed=' + !!Z.removed);
 }
 function fmtClock(ms){ const s0 = Math.floor(ms / 1000); return Math.floor(s0 / 60) + ':' + String(s0 % 60).padStart(2, '0'); }
@@ -5007,7 +5172,7 @@ document.addEventListener('keydown', (e) => {          // дубли на кла
 // Размер: resize + orientationchange + периодический пересчёт (§2)
 // ---------------------------------------------------------------------------
 function fit(){
-  G.overPose = null;   // общий план «Одного стога» — заново по размеру кадра
+  G.overPose = null; G.fakePose = null;   // общий план «Одного стога» — заново по размеру кадра
   const r = $('game').getBoundingClientRect(); if (!r.width || !r.height) return;
   const fs = getComputedStyle($('frame'));
   safeT = parseFloat(fs.paddingTop) || 0; safeB = parseFloat(fs.paddingBottom) || 0;
@@ -5056,7 +5221,8 @@ const BACKDROP_SCREENS = ['win', 'results', 'help', 'search-win', 'endless-over'
 function tick(t, fromRaf){
   if (!S.ok) return;
   // панель снизу выезжает в яме и прячется на общем плане; в нырке — с DIVE_TRAY пути (G.diveK — доля нырка, вне нырка 1)
-  G.diveK = camTw && camTw.name === 'dive' ? Math.max(0, Math.min(1, G.camQ != null ? G.camQ : (t - camTw.t0) / camTw.ms)) : 1;
+  G.diveK = G.phase === 'dive' && G.diveMs ? Math.max(0, Math.min(1, G.camQ != null && camTw ? (G.diveStage === 2 ? CFG.WHOLE.SWAP_Q + G.camQ * (1 - CFG.WHOLE.SWAP_Q) : G.camQ * CFG.WHOLE.SWAP_Q) : (t - G.diveAt) / G.diveMs))   // «Один стог»: доля всего нырка (две стадии)
+    : camTw && camTw.name === 'dive' ? Math.max(0, Math.min(1, G.camQ != null ? G.camQ : (t - camTw.t0) / camTw.ms)) : 1;
   const wantTray = G.screen !== 'menu' && (G.L || (G.mode === 'search' && G.srch)) && !NO_TRAY.has(G.phase)
     && !(G.phase === 'dive' && G.diveK < CFG.FX.DIVE_TRAY) ? 1 : 0;
   if (G.mode === 'search' && G.srch && !G.srch.won && G.screen === 'game' && !G.paused) G.srchElapsed += Math.min(250, t - (G.srchTickAt || t));   // время — на табличке (canvas), не в шапке
@@ -5084,11 +5250,12 @@ function tick(t, fromRaf){
       else { const e = Math.min(1, (t - M.holdAt - W.MELT_HOLD_MS * 0.6) / FXm.PILE_SETTLE_MS); G.pileH = M.hTo - FXm.PILE_SETTLE_DIP * Math.min(1, dh * 8) * Math.sin(2 * Math.PI * e) * (1 - e) * (1 - e); }
       if (k >= 0.5 && !M.puffed && dh > 0.002){ M.puffed = true; pileSettleFx(t, dh); }
       if (!M.down && t - M.holdAt >= W.MELT_HOLD_MS && G.screen === 'game'){ M.down = t; wholeDive(W.MELT_DOWN_MS, () => { G.melt = null; }); } }
-    const v = G.sfocusV; if (v && G.mode === 'search' && !down && !G.sfocusTw){ const dt = (G.fdt || 16.7) / 1000; G.sfocus.x += v.x * dt; G.sfocus.z += v.z * dt; const d = Math.exp(-W.DRAG_FRICTION * dt); v.x *= d; v.z *= d; if (Math.hypot(v.x, v.z) < 0.05){ G.sfocusV = null; log('fx.end', 'cam.scroll'); } } }   // инерция прокрутки
+    const v = G.sfocusV; if (v && G.mode === 'search' && !down && !G.sfocusTw && !camTw){ const dt = (G.fdt || 16.7) / 1000; G.sfocus.x += v.x * dt; G.sfocus.z += v.z * dt; const d = Math.exp(-W.DRAG_FRICTION * dt); v.x *= d; v.z *= d; if (Math.hypot(v.x, v.z) < 0.05){ G.sfocusV = null; log('fx.end', 'cam.scroll'); } } }   // инерция прокрутки
   const sf = G.sfocusTw;
   if (sf){ const q = Math.min(1, (t - sf.t0) / sf.ms), e = easeOutCubic(q); G.sfocus.x = sf.from.x + (sf.to.x - sf.from.x) * e; G.sfocus.z = sf.from.z + (sf.to.z - sf.from.z) * e;
-    if (q >= 1 || G.mode !== 'search'){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); } }
+    if (q >= 1 || G.mode !== 'search'){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); if (G.mode === 'search' && G.srch && G.srch.whole) wholeCamCheck(t, 'after'); } }   // доехали, а хода в кадре нет — следующая цель
   updateCamera(t);
+  if (G.camRec) G.camRec.push([Math.round(t), +CAM.tx.toFixed(4), +CAM.tz.toFixed(4), +CAM.dist.toFixed(3), +pxuNow().toFixed(2), down ? 1 : 0, G.sfocusTw ? 1 : 0, G.sfocusV ? 1 : 0, camTw ? 1 : 0, +G.sz.toFixed(3), +G.sfocus.x.toFixed(4), +G.sfocus.z.toFixed(4), G.sfocusTw ? +((t - G.sfocusTw.t0) / G.sfocusTw.ms).toFixed(3) : null, G.sfocusTw ? +G.sfocusTw.from.x.toFixed(4) : null, fromRaf ? 1 : 0]);   // стенд qa/cam.mjs: поза камеры по кадрам
   const u = S.mesh.material.uniforms, dimTo = G.pitOn && !(G.phase === 'dive' && G.diveK < CFG.FX.DIVE_DIM) ? 1 : 0;   // затемнение — с DIVE_DIM нырка
   u.uDim.value += (dimTo - u.uDim.value) * fk(0.08); u.uTime.value = (t - T0) / 1000;
   if (S.envMat){ const ep = G.envPop, k = ep ? Math.max(0, Math.min(1, (t - ep.t0) / CFG.FX.ENV_POP_MS)) : 1; S.envMat.uniforms.uPop.value = !ep || ep.dir > 0 ? k * 1.1 : (1 - k) * 1.1; }   // 1,1 — все с задержками успели
@@ -5157,7 +5324,7 @@ function tick(t, fromRaf){
     if (G.mode === 'campaign' && G.li === 1 && G.L && G.st && !G.save.seen.cover1 && t - G.lv.playAt >= FX.TIP_COVER_AT_MS
       && G.L.nodes.some((i, q) => q !== G.L.goldIdx && G.st.present[q] && G.st.cover[q] === 1)) tipOnce('cover1', 'Светлая кромка — откроется следующей', FX.TIP_COVER_MS);
     if (Zs && !Zs.won && !G.save.seen.zoom){ if (!G.srchNearAt && pxuNow() >= 34) G.srchNearAt = t;
-      if (G.srchNearAt && t - G.srchNearAt > FX.TIP_ZOOM_AFTER_MS && !G.pinchUsed && !G.zoomAllUsed) tipOnce('zoom', 'Щипок или «вся куча» — увидеть кучу', FX.TIP_SEARCH_MS); }
+      if (G.srchNearAt && t - G.srchNearAt > FX.TIP_ZOOM_AFTER_MS && !G.pinchUsed && !G.zoomAllUsed) tipOnce('zoom', Zs.whole ? '«Вся куча» — увидеть стог' : 'Щипок или «вся куча» — увидеть кучу', FX.TIP_SEARCH_MS); }   // в «Одном стоге» щипка нет
   }
   if (G.li === 1 && G.phase === 'play' && !(G.tipKind === 'once' && G.tipUntil > t)){ const w = playable(G.L, G.st).length ? goalTip() : G.st.stock.length ? 'Нет хода — тапни колоду' : ''; if ($('tip').textContent !== w) tip(w, 0); }
   if (toastUntil && t > toastUntil){ $('toast').classList.add('hide'); toastUntil = 0; }
@@ -5228,8 +5395,20 @@ window.STOG = {
       G.srch = Z; G.aliveNow = Z.alive; G.covDirty = true; clearAnims(); }
     G.wholeMile = Math.floor(G.srch.removed / P.N / CFG.WHOLE.MILE); G.wholeH = wholeHFor(P.N - G.srch.removed, P.N); G.pileH = G.wholeH; refreshData(); hud(); searchSave(true);
     if (G.phase === 'over'){ wholeDive(); this.settle(); } return this.sstate(); },   // хук — сразу в игру (общий план — STOG.wover())
-  wover(frac){ if (frac) this.whole(frac); else startSearch(0, true); G.sz = G.szTo = 1; G.phase = 'over'; G.phaseUntil = now() + 1e9; camTw = null; G.sfocus = { x: G.srch.front.x, z: G.srch.front.y }; return this.sstate(); },   // общий план «Одного стога» без автонырка (кадры)
+  wover(frac){ if (frac) this.whole(frac); else startSearch(0, true); camTw = null; G.melt = null; G.meltPending = null; G.diveMs = 0; wholeFakeOn(); Object.assign(CAM, wholeFakePose()); G.phase = 'over'; G.phaseUntil = now() + 1e9; G.sfocus = { x: G.srch.front.x, z: G.srch.front.y }; return this.sstate(); },   // общий план «Одного стога» (фейковый стог меню) без автонырка (кадры)
+  wrise(){ if (G.phase === 'play' && !camTw){ G.phase = 'over'; G.phaseUntil = now() + 1e9; wholeRise(CFG.WHOLE.RISE_MS, 'rise'); } return G.phase; },   // подъём на общий план, как по кнопке «вся куча»
   wdive(){ if (G.phase === 'over') wholeDive(); return G.phase; },
+  wview(){ const Z = G.srch; if (!Z || !Z.whole) return null; const P = Z.P, pl = searchPlayable(Z), inv = wholeInView();   // стенд: где подходящие карты относительно кадра
+    return { sfocus: { ...G.sfocus }, front: { ...Z.front }, top: Z.top, sz: +G.sz.toFixed(3), pxu: Math.round(pxuNow()), inView: inv.length, fitInView: inv.filter(i => wholeFits(Z, i)).length,
+      playable: pl.slice(0, 12).map(i => { const c = cardCenter(i); return { i, x: Math.round(c.x), y: Math.round(c.y), z: +c.z.toFixed(2), wx: +P.x[i].toFixed(2), wz: +P.y[i].toFixed(2), zone: Z.zone[i], hit: pickCard(c.x, c.y) }; }), bounds: { y0: safeT + HEADER_H, y1: Math.round(trayTop() * scale), w: S.cssW } }; },
+  camRec(on){ G.camRec = on ? [] : null; return !!on; }, camLog(){ const r = G.camRec || []; G.camRec = G.camRec ? [] : null; return r; },   // стенд камеры: запись [t, tx, tz, dist, px/ед, палец, sfocusTw, инерция, camTw, sz] по кадрам
+  // «Один стог»: тап «как пальцем» — подходящая открытая карта в кадре, ближняя к центру экрана, тапается по экранным координатам
+  // (камеру не трогает); в кадре нет хода — null (камера сама едет к ходу), nothing — колода
+  wtap(){ const Z = G.srch; if (!Z || !Z.whole || Z.won || G.phase !== 'play') return null;
+    const pl = wholeInView().filter(i => wholeFits(Z, i)); const cx = S.cssW / 2, cy = (safeT + HEADER_H + trayTop() * scale) / 2;
+    if (!pl.length){ if (!searchPlayable(Z).length){ searchDeck(); return 'deck'; } return null; }
+    let b = pl[0], bd = 1e9; for (const i of pl){ const c = cardCenter(i), d = Math.hypot(c.x - cx, c.y - cy); if (d < bd){ bd = d; b = i; } }
+    const c = cardCenter(b); if (pickCard(c.x, c.y) !== b) return -b; searchTapAt({ x: c.x, y: c.y }); return b; },
   szoom(z){ if (G.srch){ G.szTo = G.sz = z; } return z; },   // поиск: зум (0 — карта ~72 px, 1 — вся куча)
   // «Один стог»: открыть особую карту (kind 'half' | 'piece', n — какую по счёту), сняв всё над ней, и подвести камеру — кадры и проверка касаниями
   // «Один стог»: очередная особая карта (kind 'half' | 'piece') — открытой карте ямы (по графику, досрочно), камера к ней — кадры и касания
@@ -5285,7 +5464,7 @@ window.STOG = {
   // видимость открытых карт ямы: центр на экране, что лежит под центром (карта стога), видна ли рука-цель
   vis(){ if (!G.L) return null; return openNodes().map(q => { const i = G.L.nodes[q], c = cardCenter(i), hit = pickCard(c.x, c.y);
     return { q, rank: RANKS[rk(G.st.tab[q])], fit: ok(rk(G.st.top), rk(G.st.tab[q])), x: Math.round(c.x), y: Math.round(c.y), self: i, hit, hitNode: hit >= 0 ? G.nodeOf[hit] : -1, visible: nodeVisible(q) }; }); },
-  settle(){ if (camTw){ Object.assign(CAM, camTw.b); const d = camTw.done; camTw = null; log('fx.end', 'cam.settle'); if (d) d(); } G.phaseUntil = Math.min(G.phaseUntil, now()); if (G.shrink && !G.shrink.down) G.shrink.descAt = now(); safeTick(now(), false); placeCamera(now()); return this.state(); },   // для тестов: довести камеру и таймеры фаз
+  settle(){ for (let n = 0; camTw && n < 4; n++){   /* двухстадийные нырок и подъём — обе стадии */ Object.assign(CAM, camTw.b); const d = camTw.done; camTw = null; log('fx.end', 'cam.settle'); if (d) d(); } G.phaseUntil = Math.min(G.phaseUntil, now()); if (G.shrink && !G.shrink.down) G.shrink.descAt = now(); safeTick(now(), false); placeCamera(now()); return this.state(); },   // для тестов: довести камеру и таймеры фаз
   speed(x){ G.timeScale = x || 1; return G.timeScale; },
   reset(){ try { localStorage.removeItem(SAVE_KEY); } catch (e) {} location.reload(); },
 };
@@ -5301,7 +5480,7 @@ async function boot(){
   makeSprites(); perf('boot.sprites'); fit(); initScene(); fit(); perf('boot.initScene', 'atlas+lay');
   try { S.atlasBmp = await createImageBitmap(S.atlas); } catch (e) { S.atlasBmp = null; }   // без createImageBitmap 2D рисует прямо с S.atlas
   perf('boot.atlasBmp');
-  G.aliveNow = aliveFromSave(); refreshData(); G.coinsShown = G.save.coins; G.pileH = pileHTarget();   // за меню — куча из сейва уже осевшей
+  G.aliveNow = aliveFromSave(); menuShape(); refreshData(); G.coinsShown = G.save.coins; G.pileH = pileHTarget();   // за меню — куча из сейва уже осевшей
   perf('boot.refresh');
   envPop(1);   // луг вокруг кучи вырастает при запуске
   // меню — сразу, до компиляции шейдеров (Андрей 02.11: «долго запускаться»; на холодном старте компиляция — 3,6 с из 5 на стенде):
