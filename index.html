@@ -323,9 +323,12 @@ const CFG = {
     PLAY_PX: 72,          //   пикселей на высоту карты в игре (на экране под наклоном ~51×64 px, цель ≥ 44×62)
     OVER_SHOW_MS: 1600,   //   общий план перед нырком (искра у фронта); тап — нырок сразу
     DRAG_FRICTION: 5,     //   инерция драга-прокрутки: затухание скорости, 1/с…
-    DRAG_RUBBER: 0.12,    //   …и резинка на краях: за пределами кучи точка взгляда возвращается с такой долей за кадр
-    DRAG_LIM_R: 1.25,     //   точка взгляда не дальше стольких rad от центра стога — но не ближе, чем на высоту карты к самой дальней карте (wholeScrollLim):
-                          //   резинка края, и цель переезда камеры зажимается в этот же предел (доехали — стоим, резинка не тянет назад)
+    DRAG_RUBBER: 0.04,    //   …и резинка на краях: за расширенной границей точка взгляда возвращается с такой долей за кадр (v49: 0,12 → 0,04, мягче и дольше)
+    SCROLL_OVER: 3,       //   граница прокрутки — край живых карт плюс столько высот карты (v49, Андрей: карту на границе кадра не забрать — резинка тянула раньше;
+                          //   просил ~1,5, но чтобы карта с дальнего края встала в центр нижней трети поля, точке взгляда нужно уйти за неё на (yT − центр)/(px·sin 62°) ≈ 3)
+    CAM_FRONT: 0,         //   довод фронта после снятия (1 — мягкий, если не драгали CAM_IDLE_MS; 0 — камера на плоском полностью ручная, решение исполнителя v49)
+    CAM_IDLE_MS: 2000,    //   …довод только если пальцем не тянули столько мс
+    DRAG_LIM_R: 1.25,     //   точка взгляда не дальше стольких rad от центра стога — но не ближе, чем SCROLL_OVER к самой дальней живой карте (wholeScrollLim)
     SWAP_Q: 0.62,         //   фейковый общий план (стог меню): нырок — на этой доле пути сцена подменяется настоящим полем под пылью; подъём — на 1−SWAP_Q
     VEIL_IN_MS: 240,      //   пылевая вуаль подмены: набирает столько мс до момента подмены…
     VEIL_OUT_MS: 520,     //   …и рассеивается столько после
@@ -2814,7 +2817,12 @@ function wholeCam(){
   CAM.tx = tx; CAM.tz = tz; CAM.ty = G.hS * CAM.ys * (1 - e) + over.ty * e;
 }
 // предел прокрутки ковра (резинка и цели переездов): не ближе DRAG_LIM_R·rad к центру и так, чтобы самую дальнюю карту стога можно было подвести к центру на высоту карты
-function wholeScrollLim(){ const P = SP(); return Math.max(P.rad * CFG.WHOLE.DRAG_LIM_R, (S.rmax || 0) - 1); }
+function wholeScrollLim(){
+  const P = SP(), Z = G.srch; let rmax = S.rmax || 0;
+  if (Z && Z.whole && Z.P === P){ const c = G.rmaxCache; if (c && c.Z === Z && c.removed === Z.removed) rmax = c.r;   // край живых карт — пересчёт после снятия
+    else { rmax = 0; for (let i = 0; i < P.N; i++) if (Z.alive[i]){ const r = Math.hypot(P.x[i], P.y[i]); if (r > rmax) rmax = r; } G.rmaxCache = { Z, removed: Z.removed, r: rmax }; } }
+  return Math.max(P.rad * CFG.WHOLE.DRAG_LIM_R, rmax + CFG.WHOLE.SCROLL_OVER);
+}
 // поза игры (sz 0) для твина нырка — считается камерой и возвращается в CAM без следа
 function wholePlayPose(){ const keep = { ...CAM }, sz = G.sz, hS = G.hS; G.sz = 0; wholeCam(); const pose = { ...CAM, kind: 'search' }; Object.assign(CAM, keep); G.sz = sz; G.hS = hS; return pose; }
 // ---------- «Один стог»: общий план — фейковый стог меню (плейтест v46, Андрей 03.11: стог за меню «круто», настоящий 1 000 из синих рубашек
@@ -4841,7 +4849,7 @@ gameEl.addEventListener('pointermove', (e) => {
     if (G.srch && G.srch.whole && (G.phase !== 'play' || camTw)){ G.sfocusV = null; return; }   // «Один стог»: на общем плане и в нырке ковёр не тянется
     if (G.sfocusTw){ G.sfocusTw = null; log('fx.end', 'cam.sfocus'); }
     const k = pxuNow(), dx = e.clientX - down.lx, dy = e.clientY - down.ly, t = now(), dt = Math.max(1, t - down.lt); down.lx = e.clientX; down.ly = e.clientY; down.lt = t;
-    const mx = -dx / k, mz = -dy / (k * Math.sin(CAM.pitch)); G.sfocus.x += mx; G.sfocus.z += mz; G.sfocusV = null;
+    const mx = -dx / k, mz = -dy / (k * Math.sin(CAM.pitch)); G.sfocus.x += mx; G.sfocus.z += mz; G.sfocusV = null; G.dragAt = t;
     down.vfx = (down.vfx || 0) * 0.5 + (mx / dt * 1000) * 0.5; down.vfz = (down.vfz || 0) * 0.5 + (mz / dt * 1000) * 0.5; return;   // скорость — для инерции прокрутки
   }
   if (!down.moved || camTw || !home) return;
@@ -5047,12 +5055,11 @@ function wholeAfterTap(t){
 // длительность — по дистанции (не быстрее CAM_MS_PER_PX), повтор проверки — когда твин кончился (tick)
 function wholeCamCheck(t, why){
   const Z = G.srch, P = Z.P, W = CFG.WHOLE, f = G.sfocus; if (!Z.whole || Z.won || G.phase !== 'play' || pxuNow() < 34) return;
-  if (down || G.sfocusV || G.sfocusTw || t - (G.sfocusAt || -1e9) < W.CAM_COOL_MS) return;
+  if (!W.CAM_FRONT || why === 'after' || down || G.sfocusV || G.sfocusTw || t - (G.sfocusAt || -1e9) < W.CAM_COOL_MS || t - (G.dragAt || -1e9) < W.CAM_IDLE_MS) return;   // v49: переезда «к ходу» нет (игрок крутит сам), довод фронта — только по флагу
   const nearest = (x, z, fitOnly) => { let b = -1, bd = 1e9; for (let i = 0; i < P.N; i++) if (Z.alive[i] && !Z.cover[i] && Z.zone[i] && (!fitOnly || wholeFits(Z, i))){ const d = Math.hypot(P.x[i] - x, P.y[i] - z); if (d < bd){ bd = d; b = i; } } return [b, bd]; };
   let to = null, kind = '';
-  if (!wholeInView().some(i => wholeFits(Z, i))){ let [b] = nearest(f.x, f.z, true); if (b < 0) [b] = nearest(f.x, f.z, false); if (b < 0) return; to = { x: P.x[b], z: P.y[b] }; kind = 'whole.next'; }
-  else { const fr = Z.front;   // довод фронта — только сразу после тапа, не вторым переездом
-    if (why === 'after' || !fr || Math.hypot(fr.x - f.x, fr.y - f.z) <= W.VIEW_R * 0.5) return; const [, d] = nearest(fr.x, fr.y, true); if (d > W.VIEW_R * 0.5) return; to = { x: fr.x, z: fr.y }; kind = 'whole.front'; }
+  { const fr = Z.front;   // мягкий довод фронта (CAM_FRONT): фронт дальше полокна и у него есть ход
+    if (!fr || Math.hypot(fr.x - f.x, fr.y - f.z) <= W.VIEW_R * 0.5) return; const [, d] = nearest(fr.x, fr.y, true); if (d > W.VIEW_R * 0.5) return; to = { x: fr.x, z: fr.y }; kind = 'whole.front'; }
   { const lim = wholeScrollLim(), r = Math.hypot(to.x, to.z); if (r > lim){ to.x *= lim / r; to.z *= lim / r; } }   // цель — в пределах резинки края: доехали — и стоим, резинка назад не тянет
   const px = Math.hypot(to.x - f.x, to.z - f.z) * pxuNow(); if (px < 24) return;   // мёртвая зона: короче полкарты — не ездим
   G.sfocusTw = { from: { x: f.x, z: f.z }, to, t0: t + 150, ms: REDUCED ? 1 : Math.max(CFG.FX.SEARCH_FIND_MS, px * W.CAM_MS_PER_PX) }; G.sfocusAt = t;
@@ -5401,6 +5408,10 @@ window.STOG = {
   wview(){ const Z = G.srch; if (!Z || !Z.whole) return null; const P = Z.P, pl = searchPlayable(Z), inv = wholeInView();   // стенд: где подходящие карты относительно кадра
     return { sfocus: { ...G.sfocus }, front: { ...Z.front }, top: Z.top, sz: +G.sz.toFixed(3), pxu: Math.round(pxuNow()), inView: inv.length, fitInView: inv.filter(i => wholeFits(Z, i)).length,
       playable: pl.slice(0, 12).map(i => { const c = cardCenter(i); return { i, x: Math.round(c.x), y: Math.round(c.y), z: +c.z.toFixed(2), wx: +P.x[i].toFixed(2), wz: +P.y[i].toFixed(2), zone: Z.zone[i], hit: pickCard(c.x, c.y) }; }), bounds: { y0: safeT + HEADER_H, y1: Math.round(trayTop() * scale), w: S.cssW } }; },
+  // стенд: досягаемость подходящих лиц — для каждого нужная точка взгляда, чтобы карта встала в центр нижней трети поля; unreachable — сколько за пределом прокрутки
+  wreach(){ const Z = G.srch; if (!Z || !Z.whole) return null; const P = Z.P, lim = wholeScrollLim(), k = pxuNow() * Math.sin(CAM.pitch), vc = viewCenterY(G.trayK), yT = safeT + HEADER_H + (trayTop() * scale - safeT - HEADER_H) * 5 / 6;
+    const out = []; for (const i of searchPlayable(Z)){ const fz = P.y[i] - (yT - vc) / k, r = Math.hypot(P.x[i], fz); out.push({ i, fx: +P.x[i].toFixed(2), fz: +fz.toFixed(2), r: +r.toFixed(2), ok: r <= lim + 1e-6 }); }
+    return { lim: +lim.toFixed(2), yT: Math.round(yT), n: out.length, unreachable: out.filter(o => !o.ok).length, worst: out.length ? Math.max(...out.map(o => o.r - lim)).toFixed(2) : 0, far: out.sort((a, b) => b.r - a.r)[0] || null }; },
   camRec(on){ G.camRec = on ? [] : null; return !!on; }, camLog(){ const r = G.camRec || []; G.camRec = G.camRec ? [] : null; return r; },   // стенд камеры: запись [t, tx, tz, dist, px/ед, палец, sfocusTw, инерция, camTw, sz] по кадрам
   // «Один стог»: тап «как пальцем» — подходящая открытая карта в кадре, ближняя к центру экрана, тапается по экранным координатам
   // (камеру не трогает); в кадре нет хода — null (камера сама едет к ходу), nothing — колода
