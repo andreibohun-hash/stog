@@ -289,9 +289,10 @@ const CFG = {
     CHAIN: {              //   цепочка «в масть» (Андрей 02.11 вечер: «подыгрывать, чтобы легко набирал цепочку и иногда сбрасывалась»):
                           //   лица решаются при перевороте; пока серия короче скрытой цели — одна из открывшихся карт ±1 к взятой,
                           //   серия дошла до цели — открывающиеся карты не ±1 (срыв за 1–3 карты на видимых); добор — новая цель
-      GOAL: [12, 24],     //     цель цепочки — случайно в этих границах (сид стога); калибровка `node sim.mjs whole`: медиана серии 12–16
-      WARM_AMP: 0.25,     //     подыгрыш по синусоиде (v50, Андрей 03.11): вероятность тёплой карты = WARM_P1 ± WARM_AMP·sin(2π·прогресс·WARM_WAVES)
-      WARM_WAVES: 3,      //     …три волны везения на стог; после цели цепочки — как раньше (SOFT)
+      GOAL: [8, 16],      //     цель цепочки — случайно в этих границах (сид стога); v51: 12–24 → 8–16 — спасение искры страхует цепочку до цели,
+                          //     медиана серии ≈ цель + несколько (калибровка `node sim.mjs whole`: коридор 9–16)
+      WARM_TWO_FROM: 99,  //     пачка искры из стольких и больше карт — вторая карта тёплая с другой стороны (∓1), выбор ≥ 2 в кадре; 99 — выключено
+                          //     (решение исполнителя v51: при 5 выбор 46 → 46%, а серия 13 → 17 — не стоит того; рычаг на случай «мало выбора»)
       WARM_P1: 0.75,      //     подыгрыш не в лоб (v48, волна без повторов): пока серия короче цели, в волне ровно одна «тёплая» карта — ±1 к
       WIDE_D: 6,          //     текущей с такой вероятностью, иначе ±2; остальные — из широкого круга ±2…±WIDE_D в обе стороны, ранги волны разные,
                           //     запрещён ранг, которого в яме уже два, и ранг двух последних перевёрнутых; масти в волне разные (до v48 — пул
@@ -317,15 +318,14 @@ const CFG = {
     // меньше одной (N карт — N снятий), поэтому пачки по 3–6 идут, пока есть запас неперевёрнутых открытых карт (старт, новая область),
     // дальше — 1–2 за снятие; это честный предел, см. DESIGN
     GROW: 1.6,            //   радиус вокруг снятой, в котором открытые рубашки переворачиваются
-    WAVE_LO: 1,           //   лиц за снятие из буфера (wholeWaveSize): в спаде синусоиды столько…
-    WAVE_HI: 2,           //   …на подъёме столько…
-    WAVE_BURST: 3,        //   …и пачка столько, когда открытых рубашек в FLIP_R от снятой не меньше WAVE_BURST_FROM (старт, новая область)
-    WAVE_BURST_FROM: 6,
-    FACE_SOFT: 14,        //   лиц в яме не меньше стольких — яма богата: по одному лицу за снятие (буфер копится), подсыпания нет
-    TOPUP_MIN: 1,         //   «подсыпание»: снятие дало меньше стольких лиц и буфер пуст — ближайшая закрытая, накрытая держателями суммарно меньше
-    TOPUP_OVERLAP: 0.6,   //   этой доли, сползает из-под них и открывается (связь «лежит на» рвётся: S.slid). Занимает у будущего (та же карта
-                          //   позже не освободится), поэтому только затыкает пустые снятия; у дна ямы кандидатов нет
-    FLIP_MIN: 2,          //   меньше стольких — добираются ближайшие рубашки дальше GROW, но только в кадре (FLIP_R): за кадром лица не
+    CHARGE_N: [3, 5],     //   искра (v51, решение Андрея 03.11): кольцо заряда слева от отбоя; требуется случайно столько снятий с поля (добор не
+    CHARGE_CHAIN: 1.5,    //   заряжает), пока серия жива (≥ 2) — сегмент по столько (цепочка заряжает быстрее; если путано — 1). Полное кольцо —
+    SPARK_MIN: 3,         //   искра летит к фронту и переворачивает пачкой всё, что физически освободилось (непокрытые рубашки в FLIP_R от фронта,
+    SPARK_FLY_MS: 480,    //   полёт искры с кольца до точки удара (переворот пачки — по прилёту)
+    SPARK_WAIT: 2,        //   запас меньше SPARK_MIN при полном кольце — искра ждёт столько снятий, потом летит с тем, что есть (≥ 1)
+    SPARK_FACES_MAX: 14,  //   ближние первыми), но только если их не меньше SPARK_MIN и лиц в яме не больше SPARK_FACES_MAX — иначе ждёт (кольцо
+                          //   полное, пульсирует). Спасение: в яме нет хода — искра летит досрочно и переворачивает одну тёплую карту, кольцо сбрасывается
+    FLIP_MIN: 2,          //   (стартовая волна и запасной путь старого сейва)   меньше стольких — добираются ближайшие рубашки дальше GROW, но только в кадре (FLIP_R): за кадром лица не
                           //   открываются никогда — «иногда пусто» честнее, чем «иногда далеко» (решение 03.11); пустое снятие — пых пыли
     // камера (решение Андрея 03.11: «стог высокий на старте, играем почти на плоском» — нырок + таяние)
     PLAY_YSCALE: 0.2,     //   высота стога в игре (общий план — OVER_YSCALE 2,6; нырок — как в ямах теста, DIVE_MS); 0,3 — см. DESIGN
@@ -1366,14 +1366,14 @@ function wholeStart(seed, coll, plain, Nsize){
   const P = wholePile(Nsize), R = mulberry32(seed), N = P.N;
   const S = { k: 0, whole: true, seed, P, gold: -1, R, face: new Int16Array(N).fill(FACE_NONE), alive: new Uint8Array(N).fill(1), cover: Int16Array.from(P.above.map(a => a.length)), zone: new Uint8Array(N),
     top: 0, streak: 0, best: 0, taps: 0, draws: 0, removed: 0, found: false, won: false, plain: !!plain, order: [],
-    goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0, slid: new Set() };   // slid — порванные связи «h лежит на j» (подсыпание), ключ h·N+j
+    goal: 0, jok: [], golds: [], coll: (coll || []).slice(), goldTop: false, goldId: -1, goldNext: 0, charge: 0, chargeN: 0, sparks: 0, rescues: 0, packs: [], gaps: [], sinceSpark: 0, pending: false };   // charge/chargeN — кольцо искры (v51)
   if (!plain) wholeSchedule(S, R);
   S.front = { x: 0, y: 0 }; const flip = zoneUpdate(S, undefined, undefined, CFG.WHOLE.START_CHAIN + 2);   // старт: волна из START_CHAIN + 2 ближайших к верхушке
   // верхняя карта случайна; ближайшие к фронту — лесенка к ней (top ± 1, ± 2, ± 3: ход есть всегда, серия START_CHAIN; плейтест v34:
   // «старт без опции снять с поля»), остальные — случайные лица не ранга верхней
   S.top = Math.floor(R() * 52); const r0 = rk(S.top), dir = R() < 0.5 ? 1 : -1;
   flip.forEach((i, k) => { if (k < CFG.WHOLE.START_CHAIN) S.face[i] = (r0 + 13 + dir * (k + 1)) % 13 + 13 * Math.floor(R() * 4); else { let f; do f = Math.floor(R() * 52); while (rk(f) === r0); S.face[i] = f; } S.zone[i] = 1; });
-  S.goal = plain ? 1e9 : wholeGoal(S);
+  S.goal = plain ? 1e9 : wholeGoal(S); wholeChargeReset(S);
   return S;
 }
 // лица карт, вошедших в яму открытыми (открылись от снятия или яма доросла до них): серия короче цели — одна из них ±1 к текущей,
@@ -1419,7 +1419,8 @@ function wholeFaces(S, cards){
   list.forEach((j, k) => {
     let r;
     if (help && !soft){
-      if (k === 0){ const warmP = C.WARM_P1 + C.WARM_AMP * Math.sin(2 * Math.PI * (S.removed / S.P.N) * C.WARM_WAVES), d = (!fits && S.R() < C.NOFIT_P1) || S.R() < warmP ? 1 : 2, sg = S.R() < C.POOL_DIR_P ? lead : -lead; r = pickRank([(r0 + 13 + sg * d) % 13, (r0 + 13 - sg * d) % 13], true); }   // тёплая — одна
+      if (k === 0){ const d = (!fits && S.R() < C.NOFIT_P1) || S.R() < C.WARM_P1 ? 1 : 2, sg = S.R() < C.POOL_DIR_P ? lead : -lead; r = pickRank([(r0 + 13 + sg * d) % 13, (r0 + 13 - sg * d) % 13], true); S.warmSg = sg; }   // тёплая — одна…
+      else if (k === 1 && list.length >= C.WARM_TWO_FROM) r = pickRank([(r0 + 13 - S.warmSg) % 13], true);   // …в большой пачке вторая — с другой стороны (выбор)
       else r = pickRank(circle, false);
     } else r = pickRank(any, false);          // после цели — честный случай не ранга текущей (не «нарочно мимо»), но с правилом разнообразия
     const q = pickSuit(r); S.face[j] = r + 13 * q; used[r] = 1; cnt[r]++; suits[r] |= 1 << q; last.push(r); if (last.length > 2) last.shift();
@@ -1441,25 +1442,33 @@ function wholeTap(S, i, how){
   else { if (!free && !ok(rk(S.top), rk(f))) return { ok: false, why: 'rank' }; if (!sweep){ S.top = f; S.streak++; } }
   if (S.streak > S.best) S.best = S.streak;
   S.alive[i] = 0; S.removed++; S.taps++; S.order.push(i);
-  const opened = []; for (const j of P.below[i]) if (S.alive[j] && !S.slid.has(i * P.N + j)){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }
-  frontStep(S, i);
-  const wave = zoneUpdate(S, P.x[i], P.y[i]);   // пачка от снятой: из-под неё и ближайшие рубашки
-  res.slid = wholeTopUp(S, i, wave); res.wave = wave.length;
-  res.faced = wholeFaces(S, wave); res.opened = res.faced.slice();
+  const opened = []; for (const j of P.below[i]) if (S.alive[j]){ S.cover[j]--; if (!S.cover[j]) opened.push(j); }   // освободившиеся лежат рубашкой — запас для искры
+  frontStep(S, i); res.freed = opened.length;
+  if (!sweep){ S.charge = Math.min(S.chargeN, S.charge + (S.streak >= 2 ? CFG.WHOLE.CHARGE_CHAIN : 1)); S.sinceSpark++; }   // сегмент кольца за снятие с поля (метла — нет)
   if (S.removed === P.N) S.won = true; res.done = S.won;
+  Object.assign(res, wholeSpark(S)); res.opened = res.faced.slice(); res.wave = res.faced.length; res.charge = S.charge; res.chargeN = S.chargeN;
   return res;
 }
-// подсыпание (v50): снятие i дало в волне меньше TOPUP_MIN новых лиц — ближайшие к снятой закрытые карты с одним живым держателем, который
-// накрывает их меньше TOPUP_OVERLAP площади, «сползают» из-под него: связь рвётся (S.slid), карта открыта и входит в волну. → список таких карт
-function wholeTopUp(S, i, wave){
-  const W = CFG.WHOLE, P = S.P, out = []; if (wave.length >= W.TOPUP_MIN || (S.facesNow || 0) >= W.FACE_SOFT) return out;   // яма богата лицами — не занимать у будущего
-  const cand = [];   // закрытые у снятой: суммарная накрытость живыми держателями (coverFrac по каждому) меньше TOPUP_OVERLAP; самые свободные — первыми
-  for (const j of nearby(P, P.x[i], P.y[i], W.FLIP_R)){ if (!S.alive[j] || !S.cover[j] || S.face[j] !== FACE_NONE) continue;
-    let cv = 0; const hs = []; for (const a of P.above[j]) if (S.alive[a] && !S.slid.has(a * P.N + j)){ hs.push(a); cv += coverFrac(P, j, a); if (cv >= W.TOPUP_OVERLAP) break; }
-    if (cv >= W.TOPUP_OVERLAP) continue; cand.push([j, hs, cv, Math.hypot(P.x[j] - P.x[i], P.y[j] - P.y[i])]); }
-  cand.sort((a, b) => (a[2] - b[2]) || (a[3] - b[3]));
-  for (const [j, hs, cv] of cand){ if (wave.length >= W.TOPUP_MIN) break; for (const h of hs) S.slid.add(h * P.N + j); S.cover[j] = 0; wave.push(j); out.push(j); (S.slidCv || (S.slidCv = [])).push(cv); }
-  return out;
+// Искра (v51, решение Андрея 03.11: переворот карт — через видимый индикатор-заряд вместо скрытого буфера). Снятие само ничего не переворачивает:
+// освободившиеся из-под снятых рубашки копятся (физика как есть). Кольцо полное (charge ≥ chargeN) — искра летит к фронту и переворачивает
+// пачкой все непокрытые рубашки в FLIP_R от фронта (ближние первыми; ранги — wholeFaces v48), если их ≥ SPARK_MIN и лиц в яме ≤ SPARK_FACES_MAX,
+// иначе ждёт (pending). Спасение: в яме нет хода — искра летит досрочно, переворачивает одну тёплую карту (±1) и кольцо сбрасывается.
+// → { faced, spark, rescue, pending }
+function wholeChargeReset(S){ const [lo, hi] = CFG.WHOLE.CHARGE_N; S.charge = 0; S.chargeN = lo + Math.floor(S.R() * (hi - lo + 1)); S.pending = false; }
+function wholeSpark(S){
+  const W = CFG.WHOLE, P = S.P, fr = S.front, res = { faced: [], spark: false, rescue: false, pending: false };
+  if (S.won) return res;
+  zoneCount(S);
+  const buf = nearby(P, fr.x, fr.y, W.FLIP_R).filter(j => S.alive[j] && !S.cover[j] && S.face[j] === FACE_NONE).map(j => [j, Math.hypot(P.x[j] - fr.x, P.y[j] - fr.y)]).sort((a, b) => a[1] - b[1]).map(c => c[0]);
+  const full = S.charge >= S.chargeN - 1e-9; if (full) S.pendWait = (S.pendWait || 0) + 1; else S.pendWait = 0;
+  if (full && buf.length >= 1 && S.facesNow <= W.SPARK_FACES_MAX && (buf.length >= W.SPARK_MIN || S.pendWait > W.SPARK_WAIT)){   // запас мал — ждёт до SPARK_WAIT снятий, потом летит с тем, что есть
+    res.spark = true; res.faced = wholeFaces(S, buf); S.packs.push(res.faced.length); S.gaps.push(S.sinceSpark); S.sinceSpark = 0; S.sparks++; wholeChargeReset(S); return res; }
+  if (!searchPlayable(S).length){             // спасение «иногда 1»: хода нет — одна тёплая карта досрочно; заряд остаётся (решение исполнителя: сброс
+    let b = buf.length ? buf[0] : -1;           // кольца на спасении вырождал игру в спасения по одной — пачка не успевала собраться)
+    if (b < 0){ let bd = 1e9; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.face[i] === FACE_NONE){ const d = Math.hypot(P.x[i] - fr.x, P.y[i] - fr.y); if (d < bd){ bd = d; b = i; } } if (b >= 0){ S.front = { x: P.x[b], y: P.y[b] }; zoneCount(S); } }   // рядом рубашек нет — к ближайшей
+    if (b >= 0){ res.spark = true; res.rescue = true; res.faced = wholeFaces(S, [b]); S.rescues++; return res; }
+  }
+  res.pending = S.pending = full; return res;
 }
 // добор «Одного стога»: новая цепочка и новая цель. Из коллекции золотых с вероятностью min(DRAW_P_MAX, DRAW_P_EACH × собранных)
 // выходит золотая (по кругу, первая, чей ранг не текущий и подходит к открытой в кадре near); иначе обычная карта не ранга
@@ -1495,19 +1504,19 @@ function wholeMagnet(S, near){
 // восстановить стог из сейва: лица (все решённые), снятые карты (без проверки рангов; половинки и кусочки считаются), текущая,
 // серия и цель. Яма — вокруг снятых. sv — { faces, removed (в порядке снятия), top, streak, best, goal, goldTop, goldNext }
 function wholeRestore(S, sv){
-  const P = S.P; S.slid = new Set(sv.slid || []);
+  const P = S.P;
   if (sv.faces && sv.faces.length === P.N) for (let i = 0; i < P.N; i++) if (sv.faces[i] !== FACE_NONE) S.face[i] = sv.faces[i];
   for (const i of sv.removed || []){                 // в порядке снятия: яма растёт так же, как росла в игре
     if (i < 0 || i >= P.N || !S.alive[i]) continue;
-    S.alive[i] = 0; S.removed++; S.order.push(i); for (const j of P.below[i]) if (S.alive[j] && !S.slid.has(i * P.N + j)) S.cover[j]--;
+    S.alive[i] = 0; S.removed++; S.order.push(i); for (const j of P.below[i]) if (S.alive[j]) S.cover[j]--;
     const f = S.face[i]; if (wholeIsHalf(f)){ const J = S.jok[(f - FACE_HALF0) >> 1]; J.got++; J.sides[(f - FACE_HALF0) & 1] = 1; } else if (wholeIsPiece(f)) S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].got++;
     frontStep(S, i);
   }
-  for (const key of S.slid){ const h = Math.floor(key / P.N), j = key % P.N; if (S.alive[h] && S.alive[j]) S.cover[j]--; }   // порванные связи с живым держателем — карта открыта
   const out = zoneUpdate(S); if (out.length) wholeFaces(S, out);   // лица — из сейва; если лиц нет совсем (старый сейв, хук) — пачка у фронта
   const placed = new Set(); for (let i = 0; i < P.N; i++){ const f = S.face[i]; if (f >= FACE_HALF0){ placed.add(f); if (wholeIsHalf(f)) S.jok[(f - FACE_HALF0) >> 1].cards[(f - FACE_HALF0) & 1] = i; else S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].cards[(f - FACE_PIECE0) % CFG.GOLD.PIECES] = i; } }
   S.sched = S.sched.filter(it => !placed.has(wholeSpecialFace(it))); S.schedN = 0;   // график — только ещё не назначенные (назначенные сидят в лицах)
   if (sv.top !== undefined && sv.top >= 0) S.top = sv.top;
+  if (sv.chargeN) { S.charge = sv.charge || 0; S.chargeN = sv.chargeN; }   // кольцо искры (v51)
   S.streak = sv.streak || 0; S.best = sv.best || 0; S.goal = sv.goal || wholeGoal(S); S.goldTop = !!sv.goldTop; S.goldId = S.goldTop && !S.streak ? S.top : -1; S.goldNext = sv.goldNext || 0;
   if (S.removed === P.N) S.won = true;
   return S;
@@ -1519,19 +1528,15 @@ function frontStep(S, i){ const P = S.P, k = CFG.WHOLE.FRONT_K; S.front.x += (P.
 // рубашка). → пачка за снятие: все открытые рубашки в GROW от точки снятия (cx, cy), но не меньше FLIP_MIN ближайших (до FLIP_R;
 // n — заданный размер) — открывшиеся из-под снятой идут первыми (они ближе всех). Без (cx, cy) — от фронта (старт;
 // восстановление — только при нуле лиц); лиц нет и перевернуть нечего — фронт переезжает к ближайшей открытой
-// сколько лиц открыть за снятие (v50, Андрей 03.11: «после 200–250 снятых карты открываются по одной»). Каждая карта переворачивается
-// ровно раз, поэтому среднее за игру ≡ 1 при любой толщине стога и любом подсыпании (измерено по децилям, sim-out/whole-v50-*.txt);
-// управлять можно только распределением: освободившиеся сверх нормы карты лежат тёмными рубашками (буфер в FLIP_R от снятой) и выдаются
-// по синусоиде — WAVE_LO в спаде, WAVE_HI на подъёме (три волны на стог, как у подыгрыша WARM_WAVES), пачка WAVE_BURST при запасе
-// ≥ WAVE_BURST_FROM; пустое снятие закрывается из буфера. avail — сколько открытых рубашек в FLIP_R
-function wholeWaveSize(S, avail){ const W = CFG.WHOLE, sn = Math.sin(2 * Math.PI * (S.removed / S.P.N) * W.CHAIN.WARM_WAVES), rich = (S.facesNow || 0) >= W.FACE_SOFT;   // яма богата лицами — по одной, буфер копится
-  let t = sn > 0 && !rich ? W.WAVE_HI : W.WAVE_LO; if (avail >= W.WAVE_BURST_FROM && !rich) t = Math.max(t, W.WAVE_BURST); return Math.min(avail, t); }
+function zoneCount(S){ const P = S.P, W = CFG.WHOLE, f = S.front; let faces = 0;
+  for (let i = 0; i < P.N; i++){ if (!S.alive[i]){ S.zone[i] = 0; continue; } S.zone[i] = S.cover[i] ? (Math.hypot(P.x[i] - f.x, P.y[i] - f.y) <= W.VIEW_R ? 1 : 0) : (S.face[i] >= 0 ? 1 : 0); if (!S.cover[i] && S.face[i] >= 0) faces++; }
+  S.facesNow = faces; return faces; }
+// стартовая волна (n ближайших к фронту) и запасной путь старого сейва без лиц; в игре лица переворачивает только искра (wholeSpark)
 function zoneUpdate(S, cx, cy, n){
   const P = S.P, W = CFG.WHOLE, N = P.N; let faces = 0;
-  const count = () => { const f = S.front; faces = 0;
-    for (let i = 0; i < N; i++){ if (!S.alive[i]){ S.zone[i] = 0; continue; } S.zone[i] = S.cover[i] ? (Math.hypot(P.x[i] - f.x, P.y[i] - f.y) <= W.VIEW_R ? 1 : 0) : (S.face[i] >= 0 ? 1 : 0); if (!S.cover[i] && S.face[i] >= 0) faces++; } S.facesNow = faces; };
+  const count = () => { faces = zoneCount(S); };
   const wave = (x, y) => { const cand = nearby(P, x, y, W.FLIP_R).filter(i => S.alive[i] && !S.cover[i] && S.face[i] < 0).map(i => [i, Math.hypot(P.x[i] - x, P.y[i] - y)]).sort((a, b) => a[1] - b[1]);
-    return cand.slice(0, n || wholeWaveSize(S, cand.length)).map(c => c[0]); };   // v50: ближайшие по буферу и синусоиде (wholeWaveSize), не «все в GROW»
+    return cand.slice(0, n || W.START_CHAIN + 2).map(c => c[0]); };
   count(); const at = cx !== undefined;
   let out = at ? wave(cx, cy) : (faces ? [] : wave(S.front.x, S.front.y));
   if (!faces && !out.length){ let b = -1, bd = 1e9; for (let i = 0; i < N; i++) if (S.alive[i] && !S.cover[i]){ const d = Math.hypot(P.x[i] - S.front.x, P.y[i] - S.front.y); if (d < bd){ bd = d; b = i; } }
@@ -1546,7 +1551,7 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
   const chains = [], jokAt = [], goldAt = [], spread = [], flipD = [], flipN = [], waves = [], facesBefore = [], facesAfter = [];   // spread — «площадь ямы»: средний разброс открытых в яме от центра (EMA последних снятых), на каждый ход;
   let cx = 0, cy = 0, moves2 = 0, movesAll = 0;   // flipD — расстояние от снятой до каждого перевёрнутого лица; flipN — перевёрнутых за снятие; moves2 — ходов с ≥ 2 вариантами в кадре
   const mult = [], flipSeq = []; let mult3 = 0, ladders = 0, ladders1 = 0, waveDup = 0, wavesN2 = 0;
-  const decN = new Array(10).fill(0), decSlid = new Array(10).fill(0), decFlips = new Array(10).fill(0), decEmpty = new Array(10).fill(0), decDraws = new Array(10).fill(0);   // v50: перевёрнутых за снятие и пустых снятий по децилям прогресса   // ladders1 — то же с шагом ровно 1 (8-9-10)   // v48, россыпь номиналов: mult — максимальная кратность ранга среди лиц в кадре после хода; mult3 — ходов с ≥ 3 одного ранга;
+  const decN = new Array(10).fill(0), decPacks = Array.from({ length: 10 }, () => []), decRescue = new Array(10).fill(0), decEmpty0 = new Array(10).fill(0), decFlips = new Array(10).fill(0), decEmpty = new Array(10).fill(0), decDraws = new Array(10).fill(0);   // v50: перевёрнутых за снятие и пустых снятий по децилям прогресса   // ladders1 — то же с шагом ровно 1 (8-9-10)   // v48, россыпь номиналов: mult — максимальная кратность ранга среди лиц в кадре после хода; mult3 — ходов с ≥ 3 одного ранга;
   const ladderStep = (a, b) => { const d = (b - a + 13) % 13; return d >= 1 && d <= 3 ? 1 : d >= 10 ? -1 : 0; };   // ladders — три подряд перевёрнутых ранга в одну сторону (шаг 1–3); waveDup — волн с повтором ранга
   for (let i = 0; i < P.N; i++) if (!S.cover[i] && S.zone[i]) open.add(i);
   while (!S.won && S.taps < (maxTaps || 60000)){
@@ -1561,7 +1566,7 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
     if (pick === undefined) for (const i of pl){ const d = Math.hypot(P.x[i] - fx, P.y[i] - fy); if (d < bd){ bd = d; pick = i; } }
     const facesPre = open.size - 1;             // лиц перед ходом без снятой (волна сработала при facesPre + из-под снятой ≤ WAVE_LOW)
     const dec = Math.min(9, Math.floor(S.removed / P.N * 10));
-    const r = wholeTap(S, pick); open.clear(); decN[dec]++; decSlid[dec] += (r.slid || []).length; decFlips[dec] += (r.faced || []).length; if (!(r.faced || []).length) decEmpty[dec]++; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i]) open.add(i); fx = P.x[pick]; fy = P.y[pick];   // яма может и сузиться — открытые заново
+    const r = wholeTap(S, pick); open.clear(); decN[dec]++; if (r.spark && !r.rescue) decPacks[dec].push(r.faced.length); if (r.rescue) decRescue[dec]++; if (!r.freed) decEmpty0[dec]++; decFlips[dec] += (r.faced || []).length; if (!(r.faced || []).length) decEmpty[dec]++; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.zone[i]) open.add(i); fx = P.x[pick]; fy = P.y[pick];   // яма может и сузиться — открытые заново
     flipN.push((r.faced || []).length); for (const j of r.faced || []) flipD.push(Math.hypot(P.x[j] - P.x[pick], P.y[j] - P.y[pick]));
     { const fresh = (r.faced || []).filter(j => S.face[j] >= 0 && S.face[j] < 52).map(j => rk(S.face[j]));   // обычные лица волны по порядку переворота
       if (fresh.length >= 2){ wavesN2++; if (new Set(fresh).size < fresh.length) waveDup++; }
@@ -1577,7 +1582,8 @@ function wholeBotRun(seed, view, maxTaps, coll, plain, Nsize){
   return { taps: S.taps, draws: S.draws, moves: S.taps - S.draws, jumps, won: S.won, open: sumOpen / Math.max(1, nOpen), chains, jokAt, goldAt, goldDraws, best: S.best, spreadP90: q(spread, 0.9),
     flipDistP90: q(flipD, 0.9), waveMed: q(waves, 0.5), waveP10: q(waves, 0.1), waveP90: q(waves, 0.9), wavesN: waves.length, facesBeforeAvg: facesBefore.reduce((a, b) => a + b, 0) / Math.max(1, facesBefore.length), facesAfterAvg: facesAfter.reduce((a, b) => a + b, 0) / Math.max(1, facesAfter.length),
     flipPerMoveAvg: flipN.reduce((a, b) => a + b, 0) / Math.max(1, flipN.length), choice2: moves2 / Math.max(1, movesAll), S,
-    slidCv: S.slidCv ? [0.25, 0.4, 0.6].map(th => S.slidCv.filter(c => c >= th).length / S.slidCv.length) : [0, 0, 0], decFlips: decFlips.map((f, i) => f / Math.max(1, decN[i])), decSlid: decSlid.map((f, i) => f / Math.max(1, decN[i])), decEmpty: decEmpty.map((e, i) => e / Math.max(1, decN[i])), decDraws: decDraws.map((d, i) => d / Math.max(1, decN[i] + d)),
+    decPack: decPacks.map(a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0), decRescue: decRescue.map((r, i) => r / Math.max(1, decN[i])), decEmpty0: decEmpty0.map((e, i) => e / Math.max(1, decN[i])), decGap: decPacks.map((a, i) => a.length ? decN[i] / a.length : 0),
+    packs: S.packs, gaps: S.gaps, rescues: S.rescues, sparks: S.sparks, decFlips: decFlips.map((f, i) => f / Math.max(1, decN[i])), decEmpty: decEmpty.map((e, i) => e / Math.max(1, decN[i])), decDraws: decDraws.map((d, i) => d / Math.max(1, decN[i] + d)),
     multAvg: mult.reduce((a, b) => a + b, 0) / Math.max(1, mult.length), multP90: q(mult, 0.9), mult3: mult3 / Math.max(1, mult.length), ladders: ladders / Math.max(1, flipSeq.length), ladders1: ladders1 / Math.max(1, flipSeq.length), waveDup: waveDup / Math.max(1, wavesN2) };
 }
 function searchPlayable(S){ const out = []; for (let i = 0; i < S.P.N; i++) if (S.alive[i] && !S.cover[i] && (!S.zone || S.zone[i]) && (S.whole ? wholeFits(S, i) : i === S.gold || ok(rk(S.top), rk(S.face[i])))) out.push(i); return out; }
@@ -3360,19 +3366,22 @@ function jokerSlot(){ if (G.mode === 'search' && G.srch && G.srch.whole){ const 
 // «Один стог»: цель наверху (v50, Андрей 03.11: «цель наверх, красиво») — виджет под шапкой на всю ширину: слева мини-карты джокера и
 // золотой, по центру крупно «осталось N из N» и золотая полоса прогресса стога, справа процент, время и ★ лучшая серия; на вехе — мягкое
 // золотое свечение (G.mileAt). Поле под ним начинается ниже, чем раньше под мини-картами слева (54 px против 133)
-function wholeTopGeo(){ return { x: 8, y: safeT / scale + HEADER_H + 4, w: VW - 16, h: 62 }; }
+function wholeTopGeo(){ return { x: 8, y: safeT / scale + HEADER_H + 4, w: VW - 16, h: 72 }; }
 function drawWholeTop(c, t){
   const Z = G.srch, g = wholeTopGeo(), left = Z.P.N - Z.removed, k = Z.removed / Z.P.N, mile = G.melt ? 1 : Math.max(0, 1 - (t - (G.mileAt || -1e9)) / 2200);
   if (mile > 0 && !REDUCED) glow(c, GLOW.gold, g.x + g.w / 2, g.y + g.h / 2, g.w * 0.5, 0.4 * mile, g.h * 0.8);
   c.fillStyle = 'rgba(0,0,0,.30)'; rr(c, g.x, g.y, g.w, g.h, 14); c.fill(); c.lineWidth = 1; c.strokeStyle = 'rgba(255,207,90,' + (0.22 + 0.45 * mile).toFixed(2) + ')'; c.stroke();
-  const bx = g.x + 88, bw = g.w - 88 - 78, by = g.y + 44, ls = left.toLocaleString('ru-RU');
-  c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = PAL.cream; c.font = '900 22px ' + FONT; c.fillText(ls, bx, g.y + 19);
-  const lw = c.measureText(ls).width; c.fillStyle = PAL.creamMuted; c.font = '800 11px ' + FONT; c.fillText('из ' + Z.P.N.toLocaleString('ru-RU'), bx + lw + 6, g.y + 21);
-  c.fillStyle = 'rgba(255,255,255,.10)'; rr(c, bx, by - 4, bw, 8, 4); c.fill();
-  if (k > 0.002){ const gg = c.createLinearGradient(bx, 0, bx + bw, 0); gg.addColorStop(0, '#ffe08a'); gg.addColorStop(1, '#ffb020'); c.fillStyle = gg; rr(c, bx, by - 4, Math.max(8, bw * k), 8, 4); c.fill();
-    if (mile > 0 && !REDUCED) glow(c, GLOW.gold, bx + bw * k, by, 14, 0.8 * mile); }
-  c.textAlign = 'right'; c.fillStyle = PAL.goldText; c.font = '900 17px ' + FONT; c.fillText(Math.floor(k * 100) + '%', g.x + g.w - 12, g.y + 19);
-  c.fillStyle = PAL.creamMuted; c.font = '800 11px ' + FONT; c.fillText(fmtClock(G.srchElapsed) + (Z.best >= 3 ? ' · ★' + Z.best : ''), g.x + g.w - 12, g.y + 44);
+  const bx = g.x + 12, bw = g.w - 24, by = g.y + 60, bh = 12, tx = g.x + 88, ls = left.toLocaleString('ru-RU');
+  c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillStyle = PAL.cream; c.font = '900 22px ' + FONT; c.fillText(ls, tx, g.y + 19);
+  const lw = c.measureText(ls).width; c.fillStyle = PAL.creamMuted; c.font = '800 11px ' + FONT; c.fillText('из ' + Z.P.N.toLocaleString('ru-RU') + ' карт', tx + lw + 6, g.y + 21);
+  c.fillStyle = PAL.creamMuted; c.font = '800 11px ' + FONT; c.fillText(fmtClock(G.srchElapsed) + (Z.best >= 3 ? ' · ★' + Z.best : ''), tx, g.y + 40);
+  c.textAlign = 'right'; c.fillStyle = PAL.goldText; c.font = '900 18px ' + FONT; c.fillText(Math.floor(k * 100) + '%', g.x + g.w - 12, g.y + 22);
+  // прогресс стога — явная полоса на всю ширину виджета: золотая заливка по разобранному, деления на вехах 10%
+  c.fillStyle = 'rgba(0,0,0,.35)'; rr(c, bx, by - bh / 2, bw, bh, 6); c.fill(); c.lineWidth = 1; c.strokeStyle = 'rgba(255,207,90,.25)'; c.stroke();
+  if (k > 0.002){ const gg = c.createLinearGradient(bx, 0, bx + bw, 0); gg.addColorStop(0, '#ffe8a8'); gg.addColorStop(0.5, '#ffcc4a'); gg.addColorStop(1, '#ff9f1e'); c.fillStyle = gg; rr(c, bx, by - bh / 2, Math.max(bh, bw * k), bh, 6); c.fill();
+    c.fillStyle = 'rgba(255,255,255,.35)'; rr(c, bx + 2, by - bh / 2 + 2, Math.max(bh, bw * k) - 4, 3, 1.5); c.fill();   // блик по верху заливки
+    if (mile > 0 && !REDUCED) glow(c, GLOW.gold, bx + bw * k, by, 16, 0.9 * mile); }
+  for (let m = 1; m < 10; m++){ const x = bx + bw * m / 10, done = k >= m / 10; c.fillStyle = done ? 'rgba(120,70,0,.55)' : 'rgba(255,255,255,.22)'; c.fillRect(x - 0.5, by - bh / 2 + 2, 1, bh - 4); }   // вехи 10%
   c.textAlign = 'center';
 }
 // половина картинки джокера (side 0 — левая, 1 — правая) с рваным краем, в прямоугольнике w×h с центром в (0, 0)
@@ -3919,7 +3928,7 @@ function streakSeen(n, t){
 }
 // неверный ранг: призраки дважды подскакивают (drawGhosts по G.denyAt); fx — только журнал
 function denyHop(){ G.denyAt = now(); addFx({ kind: 'denyhop', t0: G.denyAt, dur: 2 * CFG.FX.DENY_HOP_MS }); }
-function fieldMidY(){ return (safeT / scale + HEADER_H + 64 + trayTop()) / 2; }   // середина свободного поля между верхним виджетом и панелью
+function fieldMidY(){ return (safeT / scale + HEADER_H + 76 + trayTop()) / 2; }   // середина свободного поля между верхним виджетом и панелью
 // «СЕРИЯ N» посреди поля (v50): масштаб 1,4 → 1 с пружинкой за 260 мс, держится, гаснет в последние 30%; тапы не блокирует
 function drawStreakBig(c, t){
   const FX = CFG.FX, k = (t - G.bigAt) / FX.STREAK_BIG_MS; if (!(k >= 0 && k < 1) || !G.bigN) return;
@@ -4062,6 +4071,27 @@ function drawDeck(c, d, n, t, stuck, inf){
   if (!inf && n === 1){ c.fillStyle = PAL.warm; c.font = '800 12px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('последняя', d.x, d.y - d.h / 2 - 14); }
 }
 // плашка таблички цели (один компонент для всех режимов): y0, h — плашка, ly — подпись
+// кольцо заряда искры (v51): слева от отбоя, где стояла табличка «СТОГ». chargeN сегментов, заполнено charge (половинки — по 1,5 за снятие
+// в серии); новый сегмент подскакивает (G.chargeAt); полное — пульсирует золотом, искра в центре горит; пока ждёт запаса (pending) — тоже
+function drawChargeRing(c, t, Z){
+  const a = goalGeo(), FX = CFG.FX, n = Math.max(1, Z.chargeN || 1), q = Math.min(n, Z.charge || 0), full = q >= n - 1e-9, R = 21, gap = 0.16, A0 = -Math.PI / 2;
+  const pulse = full ? 0.5 + 0.5 * Math.sin(t / 170) : 0, pop = (t - (G.chargeAt || -1e9)) / 260;
+  if (full && !REDUCED) glow(c, GLOW.gold, a.x, a.y, R + 10 + 6 * pulse, 0.35 + 0.35 * pulse, R + 10);
+  c.lineCap = 'round';
+  for (let i = 0; i < n; i++){ const s0 = A0 + i * 2 * Math.PI / n + gap / 2, s1 = A0 + (i + 1) * 2 * Math.PI / n - gap / 2, fill = Math.max(0, Math.min(1, q - i));
+    c.lineWidth = 5; c.strokeStyle = 'rgba(255,255,255,.12)'; c.beginPath(); c.arc(a.x, a.y, R, s0, s1); c.stroke();
+    if (fill > 0){ const last = i === Math.ceil(q) - 1, w = 5 + (last && pop >= 0 && pop < 1 ? 3 * Math.sin(Math.PI * pop) : 0) + 1.5 * pulse;
+      c.lineWidth = w; c.strokeStyle = full ? '#fff0b8' : PAL.goldText; c.beginPath(); c.arc(a.x, a.y, R, s0, s0 + (s1 - s0) * fill); c.stroke(); } }
+  const sz = full ? 16 + 4 * pulse : 11; c.save(); c.globalAlpha = full ? 0.95 : 0.45 + 0.2 * Math.sin(t / 400); c.drawImage(STAR, a.x - sz / 2, a.y - sz / 2, sz, sz); c.restore();
+  if (full){ c.fillStyle = PAL.goldText; c.font = '900 9px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; if ('letterSpacing' in c) c.letterSpacing = '1px'; c.fillText(Z.pending ? 'ЖДЁТ' : 'ИСКРА', a.x, a.y + R + 10); if ('letterSpacing' in c) c.letterSpacing = '0px'; }
+}
+// полёт искры (v51): с кольца к точке удара по дуге, хвост из звёзд; в момент удара — вспышка, звёзды и переворот пачки (animCard запланирован при запуске)
+function drawSparkFly(c, f, t){
+  const q = Math.min(1, (t - f.t0) / f.dur), e = easeInOutSine(q), x = f.x0 + (f.x1 - f.x0) * e, y = f.y0 + (f.y1 - f.y0) * e - Math.sin(Math.PI * q) * 90;
+  if (q >= 1){ if (!f.hit){ f.hit = true; burst(f.x1, f.y1, f.rescue ? 8 : 16, f.rescue ? 40 : 70, 650, f.t0 | 0); addFx({ kind: 'flash', x: f.x1, y: f.y1, dur: CFG.FX.FLASH_MS }); Audio.aceOpen(); } return; }
+  if (!REDUCED && t - (f.trailAt || 0) > 24){ f.trailAt = t; spawn('star', 1, x, y, { r: 6, life: 320 }, (t | 0) + f.t0 ); }
+  glow(c, GLOW.gold, x, y, 22, 0.8, 16); const sz = f.rescue ? 16 : 22; c.save(); c.translate(x, y); c.rotate(q * 6); c.drawImage(STAR, -sz / 2, -sz / 2, sz, sz); c.restore();
+}
 function goalPlate(c, a, label, y0, h, ly){
   c.fillStyle = 'rgba(0,0,0,.28)'; rr(c, a.x - 46, y0, 92, h, 16); c.fill(); c.lineWidth = 1; c.strokeStyle = 'rgba(255,207,90,.22)'; c.stroke();
   c.fillStyle = PAL.goldText; c.font = '900 12px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle';
@@ -4155,7 +4185,7 @@ function drawSearchTray(c, t){
   const shown = fl ? fl.prev : Z.won ? (G.preWinTop === null ? Z.top : G.preWinTop) : Z.top;   // летящая карта главнее победы (как в яме)
   drawDiscard(c, g, shown, t, Z.whole && (fl ? fl.prevGold : Z.goldTop && Z.goldId === Z.top && !Z.streak));
   drawDeck(c, deckGeo(), Infinity, t, false, true);
-  if (!Z.whole) drawSearchGoal(c, t, Z);   // «Один стог»: цель наверху (drawWholeTop); слот сборки золотых с панели убран — альбом (#album)
+  if (Z.whole) drawChargeRing(c, t, Z); else drawSearchGoal(c, t, Z);   // «Один стог»: кольцо искры слева от отбоя; цель наверху (drawWholeTop); золотые — альбом (#album)
   drawZoomAll(c, top);
 }
 // блеск туза в куче поиска: когда на нём осталось мало карт, сквозь щели видна искра (на общем плане — главная подсказка)
@@ -4498,6 +4528,7 @@ function renderUI(t){
   if (G.mode === 'search') drawGlint(c, t);
   for (const f of G.fx) if ((f.kind === 'fly' || f.kind === 'deal' || f.kind === 'golddraw') && !f.landed && t >= f.t0 + f.dur) land(f, t);   // посадка — до отбоя: в кадре посадки стопка уже сдвинута
   for (const f of G.fx) if (f.kind === 'veil') drawVeil(c, f, t);   // пылевая вуаль подмены сцены — под панелью
+  for (const f of G.fx) if (f.kind === 'spark.fly') drawSparkFly(c, f, t);   // искра летит с кольца к пачке
   if (G.trayK > 0.01 && ((G.L && G.st) || (G.mode === 'search' && G.srch))) drawTray(c, t);
   drawFx(c, t); drawStreakBig(c, t);
   drawParticles(c, t);
@@ -5004,7 +5035,7 @@ function searchHit(hit){
   if (Z.zone && !Z.zone[hit]){ deny(hit); Audio.peek(); buzz('closed'); tip('Рубашка — яма растёт от снятых карт', CFG.FX.TIP_HOLD_MS); log('input', 'whole.far'); return; }   // открытая без лица: перевернётся у фронта
   const how = Z.whole && G.wildArmed ? 'wild' : undefined;   // «любая карта» взведена: ранг не проверяется
   if (Z.whole ? !how && !wholeFits(Z, hit) : hit !== Z.gold && !ok(rk(Z.top), rk(Z.face[hit]))){ G.lv.wrong++; deny(hit); denyHop(); Audio.wrong(); buzz('wrong'); return; }
-  const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold], id = faceId(Z, hit), face = Z.face[hit], prevGold = !!(Z.whole && Z.goldTop && !Z.streak && Z.goldId === prev); G.preWinTop = prev; const r = searchTap(Z, hit, how);
+  const quad = cardQuad(hit), prev = Z.top, gc0 = Z.cover[Z.gold], id = faceId(Z, hit), face = Z.face[hit], prevGold = !!(Z.whole && Z.goldTop && !Z.streak && Z.goldId === prev), charge0 = Z.charge; G.preWinTop = prev; const r = searchTap(Z, hit, how);
   if (!r.ok) return;                            // 'gone' приходит без opened
   if (how){ G.wildArmed = false; spendCharge('wild'); tip(''); }
   if (r.gold) return searchWin(quad);
@@ -5012,11 +5043,16 @@ function searchHit(hit){
   else flyFx(id, quad, prev, Z.streak, { prevGold, goldTrail: !!(Z.whole && Z.goldTop) });
   if (r.done) return wholeWin(quad);
   const t = now(), P = Z.P, FX = CFG.FX, stepMs = FX.FLIP_STEP_MS * (Z.whole ? 1 - 0.5 * Math.min(1, Z.streak / FX.FLIP_FAST_AT) : 1);   // открывшиеся — волной от снятой карты, ближняя первой; с серией волна быстрее
-  r.opened.filter(j => j !== Z.gold).sort((a, b) => Math.hypot(P.x[a] - P.x[hit], P.y[a] - P.y[hit]) - Math.hypot(P.x[b] - P.x[hit], P.y[b] - P.y[hit]))
+  if (Z.whole && r.spark){                      // искра: с кольца к ближней карте пачки, пачка переворачивается по прилёту волной от точки удара
+    const g = goalGeo(), c0 = cardCenter(r.faced[0]), x1 = c0.x / scale, y1 = c0.y / scale, delay = CFG.WHOLE.SPARK_FLY_MS;
+    addFx({ kind: 'spark.fly', x0: g.x, y0: g.y, x1, y1, dur: delay, rescue: r.rescue, info: (r.rescue ? 'rescue ' : '') + 'n=' + r.faced.length }); Audio.heatUp(r.rescue ? 1 : 3); log('event', r.rescue ? 'spark.rescue' : 'spark.pack', 'n=' + r.faced.length);
+    r.faced.slice().sort((a, b) => Math.hypot(P.x[a] - P.x[r.faced[0]], P.y[a] - P.y[r.faced[0]]) - Math.hypot(P.x[b] - P.x[r.faced[0]], P.y[b] - P.y[r.faced[0]]))
+      .forEach((j, k) => { animCard(j, 1, t + delay + stepMs * k); if (k < FX.FLIP_SOUND_MAX) Audio.flip(k); }); }
+  else r.opened.filter(j => j !== Z.gold).sort((a, b) => Math.hypot(P.x[a] - P.x[hit], P.y[a] - P.y[hit]) - Math.hypot(P.x[b] - P.x[hit], P.y[b] - P.y[hit]))
     .forEach((j, k) => { animCard(j, 1, t + FX.FLIP_DELAY_MS + stepMs * k); if (k < FX.FLIP_SOUND_MAX) Audio.flip(k); });
+  if (Z.whole && Z.charge > charge0) G.chargeAt = t;   // сегмент кольца — короткий отклик
   if (Z.whole){ G.heatPt = { x: P.x[hit], z: P.y[hit] }; if (Z.streak >= FX.FIRE_AT && r.half === undefined){ const pz = quadPose(quad); burst(pz.x, pz.y, 4, 26, 420, Z.taps); } }   // «стог горит» — вокруг последней снятой; искры
-  if (Z.whole && r.slid && r.slid.length) for (const j of r.slid){ const pz = quadPose(cardQuad(j)); spawn('puff', 3, pz.x, pz.y, { Q: cardQuad(j), life: FX.PUFF_MS }, j); }   // подсыпание: карта сползла из-под соседки — пых
-  if (Z.whole && !r.opened.length && !r.done){ const pz = quadPose(quad); spawn('puff', 5, pz.x, pz.y, { Q: quad, life: FX.PUFF_MS * 1.4 }, Z.taps); addFx({ kind: 'puff.empty', dur: FX.PUFF_MS * 1.4 }); Audio.land(0.5, 0.05); }   // пустое снятие (из-под карты ничего, рядом рубашек нет): пых пыли на месте — осознанно, не «зависло»
+  if (Z.whole && !r.freed && !r.spark && !r.done){ const pz = quadPose(quad); spawn('puff', 5, pz.x, pz.y, { Q: quad, life: FX.PUFF_MS * 1.4 }, Z.taps); addFx({ kind: 'puff.empty', dur: FX.PUFF_MS * 1.4 }); Audio.land(0.5, 0.05); }   // пустое снятие (из-под карты ничего, рядом рубашек нет): пых пыли на месте — осознанно, не «зависло»
   if (r.dust > 0){                              // золотая пыль: чем ближе к тузу, тем гуще, выше и звонче; разлёт от стороны туза не зависит
     const pz = quadPose(quad), n = Math.round(4 + 16 * r.dust); spawn('dust', n, pz.x, pz.y, { k: r.dust }, Z.taps); addFx({ kind: 'dust', dur: 1800 });   // fx — журнал
     const h0 = Math.min(G.heatLevel, heatLevel(heatNow(t)));   // ступень, до которой тепло остыло с прошлой пыли
@@ -5170,7 +5206,7 @@ function searchSave(force){
   if (!force && ++G.srchSaveN % 6) return;
   const sv = Z.whole ? G.save.whole : G.save.search, rem = []; if (!Z.whole) for (let i = 0; i < Z.P.N; i++) if (!Z.alive[i]) rem.push(i);
   Object.assign(sv, { k: Z.k, seed: Z.seed, n: Z.P.N, removed: Z.whole ? Z.order.slice() : rem, top: Z.top, taps: Z.taps, draws: Z.draws, elapsed: Math.round(G.srchElapsed) });
-  if (Z.whole) Object.assign(sv, { faces: Array.from(Z.face), slid: Array.from(Z.slid), streak: Z.streak, best: Z.best, goal: Z.goal, goldTop: Z.goldTop, goldNext: Z.goldNext, bestStreak: Math.max(sv.bestStreak || 0, Z.best) });   // лица решённых, цепочка (в порядке снятия — яма растёт так же)
+  if (Z.whole) Object.assign(sv, { faces: Array.from(Z.face), charge: Z.charge, chargeN: Z.chargeN, streak: Z.streak, best: Z.best, goal: Z.goal, goldTop: Z.goldTop, goldNext: Z.goldNext, bestStreak: Math.max(sv.bestStreak || 0, Z.best) });   // лица решённых, цепочка (в порядке снятия — яма растёт так же)
   save();
 }
 // «Один стог»: размер текущего стога — строго по числу разобранных (SIZES[wins]); сейв живой, только если его размер тот же
