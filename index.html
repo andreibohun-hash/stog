@@ -326,6 +326,8 @@ const CFG = {
     SPARK_WAIT: 0,        //   (v52, Андрей: «искра летит с тем, что есть») запас ≥ SPARK_MIN 1 — летит сразу; ждёт только при 0 освободившихся
     SPARK_THREAD_MS: [400, 600],   // веер нитей: от кольца к каждой помеченной карте, длительность нити в этих границах (ближние быстрее)
     RING_FILL_MS: 320,    //   заливка кольца — дугой с easeOut за столько на каждое снятие
+    READY_MS: 250,        //   (v54) «смотри — вот эти — бах»: кольцо вспыхивает и подскакивает, помеченные карты в ореоле столько мс, потом веер (SPARK_THREAD_MS),
+    BAH_SHAKE: 2.5,       //   по прилёту — вспышка, пыль, переворот с подскоком; на первом перевороте дрожь поля на столько px, 120 мс
     SPARK_FACES_MAX: 14,  //   ближние первыми), но только если их не меньше SPARK_MIN и лиц в яме не больше SPARK_FACES_MAX — иначе ждёт (кольцо
                           //   полное, пульсирует). Спасение: в яме нет хода — искра летит досрочно и переворачивает одну тёплую карту, кольцо сбрасывается
     FLIP_MIN: 2,          //   (стартовая волна и запасной путь старого сейва)   меньше стольких — добираются ближайшие рубашки дальше GROW, но только в кадре (FLIP_R): за кадром лица не
@@ -1911,6 +1913,7 @@ const Audio = {
   goldFanfare(){ [0, 4, 7, 12].forEach((d, i) => this.bell(1046.5 * 2 ** (d / 12), 0.07, 1.4, 0.3 + i * 0.09)); this.bell(2637, 0.05, 1.6, 0.75); this.burst({ dur: 1.0, vol: 0.06, type: 'bandpass', f0: 1000, f1: 5200, att: 0.35, at: 0.25 }); this.burst({ dur: 0.35, vol: 0.05, type: 'bandpass', q: 1.2, f0: 300, f1: 1400, att: 0.25 }); log('sound', 'gold.fanfare'); },   // золотая вышла из колоды: свист взлёта, арпеджио, шиммер
   joker(){ [0, 4, 7, 12, 16].forEach((d, i) => this.bell(784 * 2 ** (d / 12), 0.05, 1.1, 0.12 + i * 0.09)); this.burst({ dur: 1.2, vol: 0.05, type: 'bandpass', f0: 900, f1: 4000, att: 0.4, at: 0.1 }); log('sound', 'joker'); },   // радужный джокер взят
   settle(k){ this.tok(95, 60, 0.32, 0.08 + 0.08 * k); this.burst({ dur: 0.6, vol: 0.04 + 0.03 * k, type: 'lowpass', f0: 600, f1: 140, att: 0.05 }); log('sound', 'settle', 'k=' + k.toFixed(2)); },   // стог осел
+  ready(){ this.bell(1318.5, 0.07, 0.35); this.bell(1760, 0.08, 0.6, 0.09); log('sound', 'ready'); },   // искра готова: короткий звон (v54)
   fanfare(lv){ const base = [523.25, 587.33, 659.25, 783.99][Math.min(3, lv)]; [0, 4, 7].forEach((d, i) => this.bell(base * 2 ** (d / 12), 0.07, 0.45, i * 0.09)); this.bell(base * 2, 0.08, 1.0, 0.3); log('sound', 'fanfare', 'level=' + lv); },   // «трам-парам» рубежа серии в тон накала (v50)
   rise(){ this.burst({ dur: 0.7, vol: 0.05, type: 'bandpass', q: 1.4, f0: 260, f1: 1300, att: 0.5 }); log('sound', 'rise'); },   // подъём на общий план между ямами
   // счётчик стога бежит вниз: шорох колоды — четыре раза, тише и реже, в конце мягкий «тук»
@@ -2276,9 +2279,9 @@ const VS = `
       if (length(o.xz) > uCut.x && o.y < uCut.y){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; } }
     vec3 p = position; float cn = aData.x, cf = aData.y; vFlipK = 0.0;
     if (aAnim.y > 0.5){
-      if (aAnim.y < 1.5){   // переворот: быстро в начале, мягко в конце; до старта — рубашкой
-        float ql = clamp((uTime - aAnim.x) / uFlip, 0.0, 1.0), q = 1.0 - pow(1.0 - ql, 3.0), th = 3.14159265 * (1.0 - q);
-        p = vec3(p.x * cos(th), (p.x * sin(th) + 0.30 * sin(3.14159265 * q)) / uYS, p.z);
+      if (aAnim.y < 1.5 || aAnim.y > 2.5){   // переворот: быстро в начале, мягко в конце; до старта — рубашкой; kind 3 — с подскоком масштаба 1,15 → 1 (искра, v54)
+        float ql = clamp((uTime - aAnim.x) / uFlip, 0.0, 1.0), q = 1.0 - pow(1.0 - ql, 3.0), th = 3.14159265 * (1.0 - q), pop = aAnim.y > 2.5 ? 1.0 + 0.15 * sin(3.14159265 * q) : 1.0;
+        p = vec3(p.x * cos(th) * pop, (p.x * sin(th) + 0.30 * sin(3.14159265 * q)) / uYS, p.z * pop);
         if (q < 0.5){ cn = 52.0; cf = 105.0; }   // первая половина переворота — рубашкой (DoubleSide: карта видна всё время)
         vFlipK = smoothstep(0.45, 0.6, ql) * (1.0 - smoothstep(0.6, 1.0, ql));
       } else {              // оползень: падение с ускорением, у земли отскок на 0,16 и затихание
@@ -4086,29 +4089,44 @@ function drawDeck(c, d, n, t, stuck, inf){
 // В центре — число карт запаса (S.bufN: что перевернёт искра), подскакивает при смене (G.bufAt), 0 — тускло. Надписей-состояний нет
 function drawChargeRing(c, t, Z){
   const a = goalGeo(), W = CFG.WHOLE, n = Math.max(1, Z.chargeN || 1), R = 21, A0 = -Math.PI / 2;
-  if (G.chargeTo !== Z.charge || G.chargeN !== Z.chargeN){ const sh = G.chargeN === Z.chargeN ? ringShown(t) : 0; G.chargeFrom = Z.charge < sh ? 0 : sh; G.chargeTo = Z.charge; G.chargeN = Z.chargeN; G.chargeAt = t; if (Z.charge >= Z.chargeN - 1e-9) G.ringFlashAt = t; }
-  const q = Math.min(n, ringShown(t)), k = q / n, full = k >= 1 - 1e-6, pulse = full ? 0.5 + 0.5 * Math.sin(t / 170) : 0, flash = Math.max(0, 1 - (t - (G.ringFlashAt || -1e9)) / 320);
-  if ((full || flash > 0) && !REDUCED) glow(c, GLOW.gold, a.x, a.y, R + 10 + 6 * pulse + 10 * flash, 0.3 + 0.3 * pulse + 0.5 * flash, R + 10);
-  c.lineCap = 'round'; c.lineWidth = 5; c.strokeStyle = 'rgba(255,255,255,.12)'; c.beginPath(); c.arc(a.x, a.y, R, 0, Math.PI * 2); c.stroke();
-  for (let i = 1; i < n; i++){ const ang = A0 + i * 2 * Math.PI / n; c.strokeStyle = 'rgba(20,15,5,.6)'; c.lineWidth = 2; c.beginPath(); c.moveTo(a.x + Math.cos(ang) * (R - 4), a.y + Math.sin(ang) * (R - 4)); c.lineTo(a.x + Math.cos(ang) * (R + 4), a.y + Math.sin(ang) * (R + 4)); c.stroke(); }   // засечки
-  if (k > 0.001){ c.lineWidth = 5 + 1.5 * pulse; c.strokeStyle = flash > 0 ? '#fff8dc' : full ? '#ffe8a8' : PAL.goldText; c.beginPath(); c.arc(a.x, a.y, R, A0, A0 + 2 * Math.PI * k); c.stroke();
+  if (G.chargeTo !== Z.charge || G.chargeN !== Z.chargeN){ if (!(G.chargeAt > t)){ const sh = G.chargeN === Z.chargeN ? ringShown(t) : 0; G.chargeFrom = Z.charge < sh ? 0 : sh; G.chargeTo = Z.charge; G.chargeN = Z.chargeN; G.chargeAt = t; } }
+  const rdy = t - (G.ringReadyAt || -1e9), hold = rdy >= 0 && rdy < W.READY_MS + 120, rk = Math.max(0, Math.min(1, rdy / 300));   // готовность: держится полным, вспышка белым, подскок 1 → 1,25 → 1, бегущий блик
+  const q = hold ? n : Math.min(n, ringShown(t)), k = q / n, full = k >= 1 - 1e-6, pulse = full ? 0.5 + 0.5 * Math.sin(t / 170) : 0, flash = hold ? 1 - 0.6 * rk : 0, sc = hold ? 1 + 0.25 * Math.sin(Math.PI * rk) : 1;
+  c.save(); c.translate(a.x, a.y); c.scale(sc, sc); c.translate(-a.x, -a.y);
+  c.fillStyle = 'rgba(8,10,4,.62)'; c.beginPath(); c.arc(a.x, a.y, R + 7, 0, Math.PI * 2); c.fill();   // тёмная подложка — контраст на поле
+  if ((full || hold) && !REDUCED) glow(c, hold ? GLOW.white : GLOW.gold, a.x, a.y, R + 12 + 6 * pulse + 10 * flash, 0.3 + 0.3 * pulse + 0.6 * flash, R + 10);
+  c.lineCap = 'round'; c.lineWidth = 7; c.strokeStyle = 'rgba(255,255,255,.08)'; c.beginPath(); c.arc(a.x, a.y, R, 0, Math.PI * 2); c.stroke();
+  for (let i = 1; i < n; i++){ const ang = A0 + i * 2 * Math.PI / n; c.strokeStyle = 'rgba(8,10,4,.8)'; c.lineWidth = 2; c.beginPath(); c.moveTo(a.x + Math.cos(ang) * (R - 5), a.y + Math.sin(ang) * (R - 5)); c.lineTo(a.x + Math.cos(ang) * (R + 5), a.y + Math.sin(ang) * (R + 5)); c.stroke(); }   // засечки
+  if (k > 0.001){ c.lineWidth = 7 + 1.5 * pulse; c.strokeStyle = hold ? '#fffbe8' : full ? '#ffe8a8' : '#ffc94a'; c.beginPath(); c.arc(a.x, a.y, R, A0, A0 + 2 * Math.PI * k); c.stroke();
     const fa = A0 + 2 * Math.PI * k, fx = a.x + Math.cos(fa) * R, fy = a.y + Math.sin(fa) * R, mv = Math.max(0, 1 - (t - (G.chargeAt || -1e9)) / W.RING_FILL_MS);   // огонёк на фронте заливки, ярче пока едет
-    if (!REDUCED) glow(c, GLOW.warm, fx, fy, 7 + 6 * mv, 0.5 + 0.5 * mv); }
-  const bn = Z.chargeN || 0, bp = (t - (G.bufAt || -1e9)) / 260, bs = bp >= 0 && bp < 1 ? 1 + 0.35 * Math.sin(Math.PI * bp) : 1;   // число — обещание N (v53), меняется только при сбросе кольца
-  c.save(); c.translate(a.x, a.y + 1); c.scale(bs, bs); c.font = '900 ' + (bn >= 10 ? 15 : 18) + 'px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle'; c.globalAlpha = bn ? 1 : 0.35; c.fillStyle = bn ? PAL.cream : PAL.creamMuted; c.fillText(String(bn), 0, 0); c.restore();
+    if (!REDUCED && !hold) glow(c, GLOW.warm, fx, fy, 8 + 6 * mv, 0.6 + 0.4 * mv); }
+  if (hold && !REDUCED){ const ra = A0 + rdy / 450 * 2 * Math.PI; c.lineWidth = 9; c.strokeStyle = 'rgba(255,255,255,' + (0.9 * (1 - rk)).toFixed(2) + ')'; c.beginPath(); c.arc(a.x, a.y, R, ra, ra + 0.9); c.stroke(); }   // бегущий блик
+  const bn = Z.chargeN || 0, bp = (t - (G.bufAt || -1e9)) / 260, bs = bp >= 0 && bp < 1 ? 1 + 0.35 * Math.sin(Math.PI * bp) : 1, dimGold = full && !hold;   // число — обещание N; готово — золотое с подскоком; полное без запаса — тускло-золотое
+  c.save(); c.translate(a.x, a.y + 1); c.scale(bs * (hold ? 1.2 : 1), bs * (hold ? 1.2 : 1)); c.font = '900 ' + (bn >= 10 ? 15 : 18) + 'px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.globalAlpha = dimGold ? 0.6 : 1; c.fillStyle = hold || dimGold ? PAL.goldText : PAL.cream; c.fillText(String(bn), 0, 0); c.restore();
+  c.restore();
 }
 function ringShown(t){ const W = CFG.WHOLE, from = G.chargeFrom || 0, to = G.chargeTo || 0, q = (t - (G.chargeAt || -1e9)) / W.RING_FILL_MS; return q >= 1 ? to : from + (to - from) * easeOutCubic(Math.max(0, q)); }
 // искорки запаса (v52): на каждой непокрытой рубашке у фронта (Z.bufList) — маленькая мерцающая звёздочка: игрок видит заранее, где и сколько откроется
 function drawBufMarks(c, t, Z){
-  if (!Z.bufList || !Z.bufList.length || G.phase !== 'play') return;
+  if (G.phase !== 'play') return;
+  const rd = G.ready; if (rd && t - rd.t0 < 2000){   // «смотри — вот эти»: ровно N карт в золотом ореоле по контуру, искорка разгорается — до прилёта нити
+    const k = Math.min(1, (t - rd.t0) / 200), live = rd.cards.filter(j => !G.fx.some(f => f.kind === 'spark.thread' && f.card === j && f.hit));
+    for (const j of live){ const Q = cardQuad(j); if (Q[0].z > 1) continue; c.save(); c.globalAlpha = 0.9 * k; c.lineJoin = 'round'; c.lineWidth = 3; c.strokeStyle = '#ffd96a';
+      c.beginPath(); c.moveTo(Q[0].x / scale, Q[0].y / scale); for (let q = 1; q < 4; q++) c.lineTo(Q[q].x / scale, Q[q].y / scale); c.closePath(); c.stroke();
+      const pz = quadPose(Q); glow(c, GLOW.gold, pz.x, pz.y, pz.w * 0.7, 0.55 * k, pz.h * 0.7); const sz = 12 + 8 * k * (0.7 + 0.3 * Math.sin(t / 90)); c.globalAlpha = k; c.drawImage(STAR, pz.x - sz / 2, pz.y - sz / 2, sz, sz); c.restore(); }
+    if (live.length) return; }
+  if (!Z.bufList || !Z.bufList.length) return;
   for (const j of Z.bufList){ if (G.fx.some(f => f.kind === 'spark.thread' && f.card === j)) continue; const p = cardCenter(j); if (p.z > 1) continue; const x = p.x / scale, y = p.y / scale; if (x < -10 || x > VW + 10 || y < 0 || y > trayTop()) continue;
     const tw = 0.55 + 0.45 * Math.sin(t / 240 + j * 1.7), sz = 9 + 3 * tw; c.save(); c.globalAlpha = 0.45 + 0.5 * tw; glow(c, GLOW.gold, x, y, 9, 0.35 * tw); c.drawImage(STAR, x - sz / 2, y - sz / 2, sz, sz); c.restore(); }
 }
 // веер нитей (v52): из кольца к каждой карте пачки своя нить — головка-звезда по дуге с хвостом, по прилёту вспышка; переворот карты запланирован на прилёт
 function drawSparkThread(c, f, t){
-  const q = Math.min(1, (t - f.t0) / f.dur), bend = f.bend, nx = -(f.y1 - f.y0), ny = f.x1 - f.x0, nl = Math.hypot(nx, ny) || 1;
+  const q = Math.min(1, (t - f.t0) / f.dur), bend = f.bend, nx = -(f.y1 - f.y0), ny = f.x1 - f.x0, nl = Math.hypot(nx, ny) || 1; if (q < 0) return;
   const at = (u) => { const ee = easeInOutSine(u), sb = Math.sin(Math.PI * u) * bend; return [f.x0 + (f.x1 - f.x0) * ee + nx / nl * sb, f.y0 + (f.y1 - f.y0) * ee + ny / nl * sb]; };
-  if (q >= 1){ if (!f.hit){ f.hit = true; burst(f.x1, f.y1, 5, 28, 420, f.t0 | 0); if (!REDUCED) glow(c, GLOW.white, f.x1, f.y1, 18, 0.8); } return; }
+  if (q >= 1){ if (!f.hit){ f.hit = true; burst(f.x1, f.y1, 6, 32, 420, f.t0 | 0); spawn('puff', 4, f.x1, f.y1, { life: CFG.FX.PUFF_MS }, f.card); Audio.flip(f.k || 0); Audio.land(0.6, 0.02);   // «бах»: вспышка, пыль, звук по порядку
+      if (G.ready && !G.ready.bah){ G.ready.bah = true; shake({ dur: 120, amp: CFG.WHOLE.BAH_SHAKE, peak: 40, hz: 14 }, 'spark.bah'); } }
+    const hk = Math.max(0, 1 - (t - f.t0 - f.dur) / 220); if (hk > 0 && !REDUCED) glow(c, GLOW.white, f.x1, f.y1, 14 + 16 * (1 - hk), 0.9 * hk); return; }
   for (let k = 1; k <= 6; k++){ const u = q - k * 0.035; if (u <= 0) break; const [x, y] = at(u); c.save(); c.globalAlpha = 0.6 * (1 - k / 7); c.drawImage(STAR, x - 3, y - 3, 6, 6); c.restore(); }   // хвост
   const [x, y] = at(q); glow(c, GLOW.gold, x, y, 14, 0.7, 10); c.save(); c.translate(x, y); c.rotate(q * 5); c.drawImage(STAR, -6, -6, 12, 12); c.restore();
 }
@@ -5064,14 +5082,15 @@ function searchHit(hit){
   else flyFx(id, quad, prev, Z.streak, { prevGold, goldTrail: !!(Z.whole && Z.goldTop) });
   if (r.done) return wholeWin(quad);
   const t = now(), P = Z.P, FX = CFG.FX, stepMs = FX.FLIP_STEP_MS * (Z.whole ? 1 - 0.5 * Math.min(1, Z.streak / FX.FLIP_FAST_AT) : 1);   // открывшиеся — волной от снятой карты, ближняя первой; с серией волна быстрее
-  if (Z.whole && r.spark){                      // веер: из кольца к каждой карте пачки своя нить (ближние быстрее), переворот — по прилёту
-    const g = goalGeo(), [m0, m1] = CFG.WHOLE.SPARK_THREAD_MS, n = r.faced.length, R = mulberry32(Z.taps * 13 + 5);
+  if (Z.whole && r.spark){                      // «смотри — вот эти — бах» (v54): кольцо вспыхивает (ringReadyAt), карты в ореоле READY_MS, затем веер нитей
+    const W = CFG.WHOLE, g = goalGeo(), [m0, m1] = W.SPARK_THREAD_MS, n = r.faced.length, R = mulberry32(Z.taps * 13 + 5), ready = r.rescue ? 0 : W.READY_MS;   // (ближние быстрее); по прилёту вспышка, пыль, переворот с подскоком, звук по порядку, дрожь на первом
+    G.ready = { t0: t, until: t + ready, cards: r.faced.slice(), rescue: r.rescue, bah: false }; G.ringReadyAt = t; G.chargeFrom = charge0 >= (G.chargeN || 0) - 1e-9 ? G.chargeN : Math.min(G.chargeN || 0, charge0 + 1.5); G.chargeTo = 0; G.chargeN = Z.chargeN; G.chargeAt = t + ready + 120; G.bufShown = Z.chargeN; G.bufAt = t + ready;
     r.faced.forEach((j, k) => { const c1 = cardCenter(j), dur = m0 + (m1 - m0) * (n > 1 ? k / (n - 1) : 0) + (R() - 0.5) * 60;
-      addFx({ kind: 'spark.thread', x0: g.x, y0: g.y, x1: c1.x / scale, y1: c1.y / scale, dur, card: j, bend: (R() - 0.5) * 120, info: 'card=' + j }); animCard(j, 1, t + dur); if (k < FX.FLIP_SOUND_MAX) Audio.flip(k); });
-    Audio.heatUp(r.rescue ? 1 : 3); log('event', r.rescue ? 'spark.rescue' : 'spark.pack', 'n=' + n); }
+      addFx({ kind: 'spark.thread', t0: t + ready, x0: g.x, y0: g.y, x1: c1.x / scale, y1: c1.y / scale, dur, card: j, k, bend: (R() - 0.5) * 120, info: 'card=' + j }); animCard(j, 3, t + ready + dur); });
+    if (r.rescue) Audio.heatUp(1); else Audio.ready(); log('event', r.rescue ? 'spark.rescue' : 'spark.pack', 'n=' + n); }
   else r.opened.filter(j => j !== Z.gold).sort((a, b) => Math.hypot(P.x[a] - P.x[hit], P.y[a] - P.y[hit]) - Math.hypot(P.x[b] - P.x[hit], P.y[b] - P.y[hit]))
     .forEach((j, k) => { animCard(j, 1, t + FX.FLIP_DELAY_MS + stepMs * k); if (k < FX.FLIP_SOUND_MAX) Audio.flip(k); });
-  if (Z.whole && Z.chargeN !== G.bufShown){ G.bufShown = Z.chargeN; G.bufAt = t; }   // новое обещание N в кольце подскакивает
+  if (Z.whole && Z.chargeN !== G.bufShown && !r.spark){ G.bufShown = Z.chargeN; G.bufAt = t; }   // новое обещание N в кольце подскакивает
   if (Z.whole){ G.heatPt = { x: P.x[hit], z: P.y[hit] }; if (Z.streak >= FX.FIRE_AT && r.half === undefined){ const pz = quadPose(quad); burst(pz.x, pz.y, 4, 26, 420, Z.taps); } }   // «стог горит» — вокруг последней снятой; искры
   if (Z.whole && !r.freed && !r.spark && !r.done){ const pz = quadPose(quad); spawn('puff', 5, pz.x, pz.y, { Q: quad, life: FX.PUFF_MS * 1.4 }, Z.taps); addFx({ kind: 'puff.empty', dur: FX.PUFF_MS * 1.4 }); Audio.land(0.5, 0.05); }   // пустое снятие (из-под карты ничего, рядом рубашек нет): пых пыли на месте — осознанно, не «зависло»
   if (r.dust > 0){                              // золотая пыль: чем ближе к тузу, тем гуще, выше и звонче; разлёт от стороны туза не зависит
