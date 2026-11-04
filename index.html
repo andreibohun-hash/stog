@@ -1496,13 +1496,21 @@ function wholeFarPick(S, n, exclude){ const P = S.P, W = CFG.WHOLE, fr = S.front
   return out; }
 // запас искры (v59): первая — ближайшая к фронту непокрытая рубашка (тёплая карта), остальные N − 1 — выбранные при сбросе кольца по всей куче
 // (S.farPick); не хватило дальних — добираются ближние. S.bufList — что перевернёт искра (пометки), S.bufAll — сколько непокрытых рубашек всего
+// Набор помеченных фиксируется при сбросе кольца (v63, Андрей: «открываются именно те, что помечены»): S.marked — упорядоченный список,
+// хранится в сейве. Помеченная карта непокрыта и её никто не накроет — остаётся до полёта. Непокрытых без лица меньше N — недостающие
+// добавляются по мере освобождения (только добавление, замены нет), первыми — ближние к фронту. До v63 набор пересчитывался после
+// каждого снятия (ближайшая к фронту заново + дальние), и пометки прыгали
 function wholeBufUpdate(S){ const P = S.P, fr = S.front, N = S.packN || 1;
-  const far = (S.farPick || []).filter(j => S.alive[j] && !S.cover[j] && S.face[j] === FACE_NONE);
-  let all = []; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.face[i] === FACE_NONE && !far.includes(i)) all.push(i);
-  all = all.map(j => [j, Math.hypot(P.x[j] - fr.x, P.y[j] - fr.y)]).sort((a, b) => a[1] - b[1]).map(c => c[0]);
-  const list = all.length ? [all[0], ...far.slice(0, N - 1)] : far.slice(0, N); for (let k = 1; list.length < N && k < all.length; k++) list.push(all[k]);
-  S.bufAll = all.length + far.length; S.bufList = list.slice(0, N); S.bufN = S.bufList.length; return S.bufList.slice(); }
-function wholeChargeReset(S){ const W = CFG.WHOLE, [lo, hi] = W.CHARGE_N, [plo, phi] = W.START_PACK_N; S.charge = 0; S.chargeN = lo + Math.floor(S.R() * (hi - lo + 1)); S.pending = false;
+  if (!S.marked) S.marked = [];
+  S.marked = S.marked.filter(j => S.alive[j] && !S.cover[j] && S.face[j] === FACE_NONE);   // снятая метлой или открытая иначе — выбывает (замены нет, только добор ниже)
+  let all = []; for (let i = 0; i < P.N; i++) if (S.alive[i] && !S.cover[i] && S.face[i] === FACE_NONE && !S.marked.includes(i)) all.push(i);
+  if (S.marked.length < N && all.length){
+    all = all.map(j => [j, Math.hypot(P.x[j] - fr.x, P.y[j] - fr.y)]).sort((a, b) => a[1] - b[1]).map(c => c[0]);
+    if (!S.marked.length) S.marked.push(all.shift());   // первая — тёплая у фронта
+    const far = (S.farPick || []).filter(j => all.includes(j)); for (const j of far){ if (S.marked.length >= N) break; S.marked.push(j); all.splice(all.indexOf(j), 1); }   // дальние, выбранные при сбросе
+    while (S.marked.length < N && all.length) S.marked.push(all.shift()); }   // не хватило — ближние к фронту
+  S.bufAll = S.marked.length + all.length; S.bufList = S.marked.slice(0, N); S.bufN = S.bufList.length; return S.bufList.slice(); }
+function wholeChargeReset(S){ const W = CFG.WHOLE, [lo, hi] = W.CHARGE_N, [plo, phi] = W.START_PACK_N; S.charge = 0; S.chargeN = lo + Math.floor(S.R() * (hi - lo + 1)); S.pending = false; S.marked = [];   // новый набор (v63)
   if (S.sparks < W.START_PACKS && !S.plain){ S.packN = plo + Math.floor(S.R() * (phi - plo + 1)); S.chargeN = W.START_CHARGE[0]; if (!S.sparks) S.charge = W.START_CHARGE[1]; S.farPick = wholeFarPick(S, S.packN - 2, null); return; }   // стартовые пачки: тёплая и лесенка у фронта, остальные по куче (v59)   // старт легче (v56): первые START_PACKS пачек по 4–5 и кольцо по 2, первое — уже с одним сегментом
   const faces = S.facesNow || 0; if (faces < W.URGENT_FACES) S.chargeN = W.START_CHARGE[0];   // срочно (v57): лиц мало — кольцо на 2 снятия
   S.packN = Math.max(W.PACK_N[0], Math.min(W.PACK_N[1], W.FLOOR - faces + S.chargeN));   // пачка от нехватки (v57): до FLOOR лиц с учётом снятий до полёта
@@ -1593,7 +1601,7 @@ function wholeRestore(S, sv){
   const placed = new Set(); for (let i = 0; i < P.N; i++){ const f = S.face[i]; if (f >= FACE_HALF0){ placed.add(f); if (wholeIsHalf(f)) S.jok[(f - FACE_HALF0) >> 1].cards[(f - FACE_HALF0) & 1] = i; else S.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].cards[(f - FACE_PIECE0) % CFG.GOLD.PIECES] = i; } }
   S.sched = S.sched.filter(it => !placed.has(wholeSpecialFace(it))); S.schedN = 0;   // график — только ещё не назначенные (назначенные сидят в лицах)
   if (sv.top !== undefined && sv.top >= 0) S.top = sv.top;
-  if (sv.chargeN) { S.charge = sv.charge || 0; S.chargeN = sv.chargeN; S.packN = sv.packN || sv.chargeN; }   // кольцо искры (v51): остаток снятий и N карт пачки
+  if (sv.chargeN) { S.charge = sv.charge || 0; S.chargeN = sv.chargeN; S.packN = sv.packN || sv.chargeN; S.marked = (sv.marked || []).slice(); S.farPick = (sv.farPick || []).slice(); }   // кольцо искры: остаток снятий, N карт пачки, набор помеченных (v63)
   wholeBufUpdate(S);
   S.streak = sv.streak || 0; S.best = sv.best || 0; S.goal = sv.goal || wholeGoal(S); S.goldTop = !!sv.goldTop; S.goldId = S.goldTop && !S.streak ? S.top : -1; S.goldNext = sv.goldNext || 0;
   if (S.removed === P.N) S.won = true;
@@ -5393,7 +5401,7 @@ function searchSave(force){
   if (!force && ++G.srchSaveN % 6) return;
   const sv = Z.whole ? G.save.whole : G.save.search, rem = []; if (!Z.whole) for (let i = 0; i < Z.P.N; i++) if (!Z.alive[i]) rem.push(i);
   Object.assign(sv, { k: Z.k, seed: Z.seed, n: Z.P.N, removed: Z.whole ? Z.order.slice() : rem, top: Z.top, taps: Z.taps, draws: Z.draws, elapsed: Math.round(G.srchElapsed) });
-  if (Z.whole) Object.assign(sv, { faces: Array.from(Z.face), charge: Z.charge, chargeN: Z.chargeN, packN: Z.packN, streak: Z.streak, best: Z.best, goal: Z.goal, goldTop: Z.goldTop, goldNext: Z.goldNext, bestStreak: Math.max(sv.bestStreak || 0, Z.best) });   // лица решённых, цепочка (в порядке снятия — яма растёт так же)
+  if (Z.whole) Object.assign(sv, { faces: Array.from(Z.face), charge: Z.charge, chargeN: Z.chargeN, packN: Z.packN, marked: (Z.marked || []).slice(), farPick: (Z.farPick || []).slice(), streak: Z.streak, best: Z.best, goal: Z.goal, goldTop: Z.goldTop, goldNext: Z.goldNext, bestStreak: Math.max(sv.bestStreak || 0, Z.best) });   // лица решённых, цепочка (в порядке снятия — яма растёт так же)
   save();
 }
 // «Один стог»: размер текущего стога — строго по числу разобранных (SIZES[wins]); сейв живой, только если его размер тот же
@@ -5688,6 +5696,7 @@ window.STOG = {
     G.wholeMile = Math.floor(G.srch.removed / P.N / CFG.WHOLE.MILE); G.wholeH = wholeHFor(P.N - G.srch.removed, P.N); G.pileH = G.wholeH; refreshData(); hud(); searchSave(true);
     if (G.phase === 'over'){ wholeDive(); this.settle(); } return this.sstate(); },   // хук — сразу в игру (общий план — STOG.wover())
   wover(frac){ if (frac) this.whole(frac); else startSearch(0, true); camTw = null; G.melt = null; G.meltPending = null; G.diveMs = 0; wholeFakeOn(); Object.assign(CAM, wholeFakePose()); G.phase = 'over'; G.phaseUntil = now() + 1e9; G.sfocus = { x: G.srch.front.x, z: G.srch.front.y }; return this.sstate(); },   // общий план «Одного стога» (фейковый стог меню) без автонырка (кадры)
+  wmarks(){ const Z = G.srch; if (!Z || !Z.whole) return null; return { marked: (Z.marked || []).slice(), n: Z.packN, charge: Z.charge, chargeN: Z.chargeN }; },   // стенд: зафиксированный набор помеченных
   wflip(){ const Z = G.srch; if (!Z || !Z.whole) return null; const a = S.aAnim.array, tn = (now() - T0) / 1000, F4 = CFG.FLIP4_S; let flipping = 0; for (let i = 0; i < Z.P.N; i++){ const o = S.instOf[i] * 2; if (a[o + 1] > 3.5 && tn >= a[o] && tn < a[o] + F4 + 0.14) flipping++; }
     return { flipping, threads: G.fx.filter(f => f.kind === 'spark.thread').length, marksVisible: G.markHold > now() ? 0 : Z.bufN, hold: Math.max(0, Math.round((G.markHold || 0) - now())) }; },   // стенд: переворачиваемых сейчас и видимых пометок
   ach(id){ if (id === 'reset'){ G.save.ach = { done: {}, total: 0 }; save(); return 0; } achUnlock(id); return Object.keys(G.save.ach.done); },   // открыть ачивку (кадры)
