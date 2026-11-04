@@ -332,6 +332,10 @@ const CFG = {
     FAR_R: 9,             //   …дальние карты — не дальше стольких высот карты от фронта (на 3 000 иначе 76% лиц за кадром и прокрутка каждые 5 снятий)
     FAR_MIN_D: 1.5,       //   (v59, Андрей: «открытые карты по всей куче — перемещаясь, искать нужную») пачка: тёплая карта у фронта, остальные —
                           //   случайные непокрытые рубашки по всей куче, не ближе стольких высот карты друг к другу; стартовая пачка наполовину по куче
+    PACK_PAUSE_MS: 600,   //   (v62, Андрей: «путаю карты, которые переворачиваются, и следующие») после последнего переворота пачки — пауза с пустым кольцом,
+    MARK_IN_MS: 400,      //   потом новые пометки проявляются за столько (тинт и кромка), по очереди с шагом MARK_STEP_MS и вспышкой появления; число в кольце — с ними
+    MARK_STEP_MS: 60,
+    FLIP_STEP_MS2: 80,    //   карты пачки переворачиваются с таким шагом, ближняя к фронту первой
     MARK_TINT: [0.25, 0.7],   // (v58, Андрей: «усилить визуал следующих карт») тинт рубашки помеченных карт по доле заряда, пульс в такт кольцу, вспышка на снятие
     MARK_THREADS_FROM: 0.66,  //   с этой доли заряда — тусклые нити от кольца к помеченным картам (видно, куда полетит искра)
     CHARGE_N: [3, 5],     //   искра (v51, решение Андрея 03.11): кольцо заряда слева от отбоя; требуется случайно столько снятий с поля (добор не
@@ -455,6 +459,7 @@ const CFG = {
   FLY_LIFT_MS: 60,        // карта приподнимается на месте перед полётом
   DEAL_MS: 260,           // карта колоды ложится на отбой
   FLIP_S: 0.26,           // переворот открывшейся карты, с
+  FLIP4_S: 0.35,          // переворот картой искры (v62): подъём, 180° вокруг длинной оси, досаживание — с
   SLIDE_S: 0.55,          // карты оползня падают в яму, с (с ускорением; затем отскок ещё 0,3 этого времени)
   SLIDE_STAGGER_S: 0.5,   // разброс начала падения карт оползня, с
   WIN_MS: 1700,           // от взятого туза до экрана победы (волна по стогу успевает пройти)
@@ -2324,7 +2329,7 @@ const VS = `
   attribute vec4 aData;   // x — ближняя ячейка, y — дальняя, z — тень (+2 — тёплый край, +4 — «почти открыта»), w — вид: 0 стог, 1 вне ямы, 2 закрыта, 3 открыта, 5 земля, 6 золото, −1 снята
   attribute vec2 aAnim;   // x — начало, с; y — 1 переворот, 2 падение оползнем
   attribute vec3 aHill;   // xy — наклон поверхности стога под картой (dh/dx, dh/dz), z — AO (слои сверху, карты у земли); считается при укладке
-  uniform float uPxPerUnit, uLodPx, uCols, uTime, uFlip, uSlide, uFaceRot, uYS; uniform vec2 uCell;   // uYS — сплющивание стога по высоте (анимации его не сплющивает)
+  uniform float uPxPerUnit, uLodPx, uCols, uTime, uFlip, uFlip4, uSlide, uFaceRot, uYS; uniform vec2 uCell;   // uYS — сплющивание стога по высоте (анимации его не сплющивает)
   uniform vec3 uLight; uniform float uHillK, uMaxHs;   // свет (привязан к экрану), сила света холма (1 — общий план, 0,3 — яма), высота стога в мире
   uniform vec4 uFocus, uSigh;   // прожектор ямы: xy — центр (мир), z..w — от полного света до тёмного; волна «вздоха»: xy — центр, z — старт (с), w — амплитуда
   uniform vec2 uSighK;          // волна «вздоха»: скорость (высот карты в секунду), длительность (с) — CFG.FX.SIGH_SPEED, SIGH_S
@@ -2342,7 +2347,13 @@ const VS = `
       if (length(o.xz) > uCut.x && o.y < uCut.y){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; } }
     vec3 p = position; float cn = aData.x, cf = aData.y; vFlipK = 0.0;
     if (aAnim.y > 0.5){
-      if (aAnim.y < 1.5 || aAnim.y > 2.5){   // переворот: быстро в начале, мягко в конце; до старта — рубашкой; kind 3 — с подскоком масштаба 1,15 → 1 (искра, v54)
+      if (aAnim.y > 3.5){   // kind 4 (искра, v62): карта приподнимается, поворачивается на 180° вокруг длинной оси по дуге (easeInOut, uFlip4 с),
+        float ql = clamp((uTime - aAnim.x) / uFlip4, 0.0, 1.0), q = ql * ql * (3.0 - 2.0 * ql), th = 3.14159265 * (1.0 - q);   // садится с коротким мягким досаживанием (без масштаба)
+        float st = clamp((uTime - aAnim.x - uFlip4) / 0.14, 0.0, 1.0), settle = -0.05 * sin(3.14159265 * st) * (1.0 - st);
+        p = vec3(p.x * cos(th), (p.x * sin(th) + 0.42 * sin(3.14159265 * q) + settle) / uYS, p.z);
+        if (q < 0.5){ cn = 52.0; cf = 105.0; }
+        vFlipK = smoothstep(0.4, 0.55, ql) * (1.0 - smoothstep(0.55, 0.85, ql));   // блик на середине
+      } else if (aAnim.y < 1.5 || aAnim.y > 2.5){   // переворот: быстро в начале, мягко в конце; до старта — рубашкой; kind 3 — с подскоком масштаба 1,15 → 1 (v54, больше не используется)
         float ql = clamp((uTime - aAnim.x) / uFlip, 0.0, 1.0), q = 1.0 - pow(1.0 - ql, 3.0), th = 3.14159265 * (1.0 - q), pop = aAnim.y > 2.5 ? 1.0 + 0.15 * sin(3.14159265 * q) : 1.0;
         p = vec3(p.x * cos(th) * pop, (p.x * sin(th) + 0.30 * sin(3.14159265 * q)) / uYS, p.z * pop);
         if (q < 0.5){ cn = 52.0; cf = 105.0; }   // первая половина переворота — рубашкой (DoubleSide: карта видна всё время)
@@ -2578,7 +2589,7 @@ function initScene(){
   tex.anisotropy = Math.min(8, S.renderer.capabilities.getMaxAnisotropy());
   S.mat = new THREE.ShaderMaterial({ vertexShader: VS, fragmentShader: FS, side: THREE.DoubleSide, uniforms: {   // DoubleSide — переворот не дырявит яму
     uMap: { value: tex }, uPxPerUnit: { value: 1 }, uLodPx: { value: 44 }, uCols: { value: COLS }, uTime: { value: 0 }, uDim: { value: 0 }, uFaceRot: { value: 0 }, uYS: { value: 1 },
-    uFlip: { value: CFG.FLIP_S }, uSlide: { value: CFG.SLIDE_S }, uCell: { value: new THREE.Vector2(CELL_W / ATLAS_W, CELL_H / ATLAS_H) },
+    uFlip: { value: CFG.FLIP_S }, uFlip4: { value: CFG.FLIP4_S }, uSlide: { value: CFG.SLIDE_S }, uCell: { value: new THREE.Vector2(CELL_W / ATLAS_W, CELL_H / ATLAS_H) },
     uCellPx: { value: new THREE.Vector2(CELL_W, CELL_H) }, uAtlasPx: { value: new THREE.Vector2(ATLAS_W, ATLAS_H) }, uBias: { value: 0 },
     uLight: { value: new THREE.Vector3(-0.5, 0.8, 0.3).normalize() }, uHillK: { value: 1 }, uMaxHs: { value: 1 },   // свет, холм — ставят placeCamera и tick
     uFocus: { value: new THREE.Vector4(0, 0, 1e3, 1e3 + 1) }, uSigh: { value: new THREE.Vector4(0, 0, -1e3, 0) }, uHeat: { value: new THREE.Vector4(0, 0, 1, 0) }, uMark: { value: 0 }, uDimBias: { value: CFG.DIM_BIAS }, uDprBias: { value: 0 },
@@ -2727,7 +2738,7 @@ function faceCells(Z, i){
 function faceId(Z, i){ const f = Z.face[i]; return f < 52 ? f : wholeIsPiece(f) ? Z.golds[(f - FACE_PIECE0) / CFG.GOLD.PIECES | 0].id : -1; }
 // поиск: открытая — лицом, закрытая — рубашкой, туз — всегда золотом и блестит (сквозь щели тоже видно)
 function refreshSearch(){
-  const Z = G.srch, P = Z.P, a = S.aData.array, tones = Z.whole ? wholeTones(Z) : null, marked = Z.whole && Z.bufList ? new Set(Z.bufList) : null;
+  const Z = G.srch, P = Z.P, a = S.aData.array, tones = Z.whole ? wholeTones(Z) : null, marked = Z.whole && Z.bufList && !(G.markHold > now()) ? new Set(Z.bufList) : null;   // v62: в паузе флаг 8 не ставится
   for (let i = 0; i < P.N; i++){
     const o = S.instOf[i] * 4;
     if (!Z.alive[i]){ a[o + 3] = -1; continue; }
@@ -4155,7 +4166,8 @@ function drawChargeRing(c, t, Z){
   const a = goalGeo(), W = CFG.WHOLE, n = Math.max(1, Z.chargeN || 1), R = 21, A0 = -Math.PI / 2;
   if (G.chargeTo !== Z.charge || G.chargeN !== Z.chargeN){ if (!(G.chargeAt > t)){ const sh = G.chargeN === Z.chargeN ? ringShown(t) : 0; G.chargeFrom = Z.charge < sh ? 0 : sh; G.chargeTo = Z.charge; G.chargeN = Z.chargeN; G.chargeAt = t; } }
   const rdy = t - (G.ringReadyAt || -1e9), hold = rdy >= 0 && rdy < W.READY_MS + 120, rk = Math.max(0, Math.min(1, rdy / 300));   // готовность: держится полным, вспышка белым, подскок 1 → 1,25 → 1, бегущий блик
-  const q = hold ? n : Math.min(n, ringShown(t)), k = q / n, full = k >= 1 - 1e-6, pulse = full ? 0.5 + 0.5 * Math.sin(t / 170) : 0, flash = hold ? 0.5 * (1 - rk) : 0, sc = hold ? 1 + 0.1 * Math.sin(Math.PI * rk) : 1;   // v55: тише — вспышка вполовину, подскок 1,1
+  const wait = G.markHold > t && !hold;   // v62: после переворота до появления новых пометок кольцо пустое и спокойное, без числа
+  const q = hold ? n : wait ? 0 : Math.min(n, ringShown(t)), k = q / n, full = k >= 1 - 1e-6, pulse = full ? 0.5 + 0.5 * Math.sin(t / 170) : 0, flash = hold ? 0.5 * (1 - rk) : 0, sc = hold ? 1 + 0.1 * Math.sin(Math.PI * rk) : 1;   // v55: тише — вспышка вполовину, подскок 1,1
   c.save(); c.translate(a.x, a.y); c.scale(sc, sc); c.translate(-a.x, -a.y);
   c.fillStyle = 'rgba(8,10,4,.62)'; c.beginPath(); c.arc(a.x, a.y, R + 7, 0, Math.PI * 2); c.fill();   // тёмная подложка — контраст на поле
   if ((full || hold) && !REDUCED) glow(c, GLOW.gold, a.x, a.y, R + 12 + 6 * pulse + 8 * flash, 0.3 + 0.3 * pulse + 0.4 * flash, R + 10);
@@ -4167,15 +4179,17 @@ function drawChargeRing(c, t, Z){
   if (hold && !REDUCED){ const ra = A0 + rdy / 450 * 2 * Math.PI; c.lineWidth = 8; c.strokeStyle = 'rgba(255,255,255,' + (0.6 * (1 - rk)).toFixed(2) + ')'; c.beginPath(); c.arc(a.x, a.y, R, ra, ra + 0.9); c.stroke(); }   // бегущий блик
   const bn = hold ? 0 : Math.max(0, Math.ceil(n - ringShown(t) - 1e-6)), bp = (t - (G.bufAt || -1e9)) / 260, bs = bp >= 0 && bp < 1 ? 1 + 0.35 * Math.sin(Math.PI * bp) : 1, dimGold = full && !hold;   // число — сколько снятий до переворота (v56): 3 → 2 → 1 → 0; готово — золотое с подскоком; полное без запаса — тускло-золотое
   if (bn !== G.bufShown){ G.bufShown = bn; G.bufAt = t; }
+  const nap = wait ? 0 : Math.max(0, Math.min(1, (t - (G.markShowAt || -1e9)) / W.MARK_IN_MS));   // число появляется вместе с пометками
   c.save(); c.translate(a.x, a.y + 1); c.scale(bs * (hold ? 1.2 : 1), bs * (hold ? 1.2 : 1)); c.font = '900 ' + (bn >= 10 ? 15 : 18) + 'px ' + FONT; c.textAlign = 'center'; c.textBaseline = 'middle';
-  c.globalAlpha = dimGold ? 0.6 : 1; c.fillStyle = hold || dimGold ? PAL.goldText : PAL.cream; c.fillText(String(bn), 0, 0); c.restore();
+  c.globalAlpha = (dimGold ? 0.6 : 1) * (hold ? 1 : nap); c.fillStyle = hold || dimGold ? PAL.goldText : PAL.cream; c.fillText(String(bn), 0, 0); c.restore();
   c.restore();
 }
 function ringShown(t){ const W = CFG.WHOLE, from = G.chargeFrom || 0, to = G.chargeTo || 0, q = (t - (G.chargeAt || -1e9)) / W.RING_FILL_MS; return q >= 1 ? to : from + (to - from) * easeOutCubic(Math.max(0, q)); }
 // искорки запаса (v52): на каждой непокрытой рубашке у фронта (Z.bufList) — маленькая мерцающая звёздочка: игрок видит заранее, где и сколько откроется
 // сила подсветки помеченных рубашек (v58): тинт 0,25 → 0,7 по доле заряда, пульс в такт кольцу (1,2 с), вспышка 0,2 с на каждое снятие
 function markStrength(t, Z){ const W = CFG.WHOLE, ck = Math.max(0, Math.min(1, ringShown(t) / Math.max(1, Z.chargeN || 1))), pulse = 0.85 + 0.15 * Math.sin(2 * Math.PI * t / CFG.FX.TRACK_SHINE_MS), fl = Math.max(0, 1 - (t - (G.chargeAt || -1e9)) / 200);
-  return Math.min(1, (W.MARK_TINT[0] + (W.MARK_TINT[1] - W.MARK_TINT[0]) * ck) * pulse + 0.3 * fl); }
+  if (G.markHold > t) return 0; const ap = Math.max(0, Math.min(1, (t - (G.markShowAt || -1e9)) / W.MARK_IN_MS));   // v62: пометки проявляются после паузы
+  return Math.min(1, (W.MARK_TINT[0] + (W.MARK_TINT[1] - W.MARK_TINT[0]) * ck) * pulse + 0.3 * fl) * ap; }
 function drawBufMarks(c, t, Z){
   if (G.phase !== 'play') return;
   const rd = G.ready; if (rd && t - rd.t0 < 2000){   // «смотри — вот эти»: ровно N карт в золотом ореоле по контуру, искорка разгорается — до прилёта нити
@@ -4184,21 +4198,25 @@ function drawBufMarks(c, t, Z){
       c.beginPath(); c.moveTo(Q[0].x / scale, Q[0].y / scale); for (let q = 1; q < 4; q++) c.lineTo(Q[q].x / scale, Q[q].y / scale); c.closePath(); c.stroke();
       const pz = quadPose(Q); glow(c, GLOW.gold, pz.x, pz.y, pz.w * 0.6, 0.35 * k, pz.h * 0.6); const sz = 12 + 5 * k * (0.7 + 0.3 * Math.sin(t / 90)); c.globalAlpha = k; c.drawImage(STAR, pz.x - sz / 2, pz.y - sz / 2, sz, sz); c.restore(); }
     if (live.length) return; }
-  if (!Z.bufList || !Z.bufList.length) return;
+  if (!Z.bufList || !Z.bufList.length || G.markHold > t) return;   // v62: пока летит веер, крутится переворот и идёт пауза — новых пометок нет
   const W = CFG.WHOLE, ck = Math.max(0, Math.min(1, ringShown(t) / Math.max(1, Z.chargeN || 1))), g = goalGeo();   // v58: золотая кромка по контуру (яркость с зарядом), искорка-блик сверху, нити от кольца при заряде ≥ MARK_THREADS_FROM
   const fl = Math.max(0, 1 - (t - (G.chargeAt || -1e9)) / 200);
-  for (const j of Z.bufList){ if (G.fx.some(f => f.kind === 'spark.thread' && f.card === j)) continue; const Q = cardQuad(j); if (Q[0].z > 1) continue; const pz = quadPose(Q); if (pz.x < -20 || pz.x > VW + 20 || pz.y < 0 || pz.y > trayTop()) continue;
-    c.save(); c.lineJoin = 'round'; c.lineWidth = 1.5 + 0.5 * ck + fl; c.globalAlpha = Math.min(1, 0.35 + 0.65 * ck + 0.3 * fl); c.strokeStyle = ck > 0.66 ? '#ffe28a' : '#ffcf5a';
+  Z.bufList.forEach((j, idx) => { if (G.fx.some(f => f.kind === 'spark.thread' && f.card === j)) return; const Q = cardQuad(j); if (Q[0].z > 1) return; const pz = quadPose(Q); if (pz.x < -20 || pz.x > VW + 20 || pz.y < 0 || pz.y > trayTop()) return;
+    const ap = Math.max(0, Math.min(1, (t - (G.markShowAt || -1e9) - idx * W.MARK_STEP_MS) / W.MARK_IN_MS)); if (ap <= 0) return;   // проявление по очереди (v62)
+    const pop = ap < 1 ? Math.sin(Math.PI * ap) : 0;
+    c.save(); c.globalAlpha = ap; if (pop > 0 && !REDUCED) glow(c, GLOW.gold, pz.x, pz.y, pz.w * 0.55, 0.5 * pop, pz.h * 0.55);   // маленькая вспышка появления
+    c.lineJoin = 'round'; c.lineWidth = 1.5 + 0.5 * ck + fl; c.globalAlpha = Math.min(1, 0.35 + 0.65 * ck + 0.3 * fl) * ap; c.strokeStyle = ck > 0.66 ? '#ffe28a' : '#ffcf5a';
     c.beginPath(); c.moveTo(Q[0].x / scale, Q[0].y / scale); for (let q = 1; q < 4; q++) c.lineTo(Q[q].x / scale, Q[q].y / scale); c.closePath(); c.stroke();
     if (ck >= W.MARK_THREADS_FROM && !REDUCED){ c.globalAlpha = 0.22 + 0.1 * fl; c.lineWidth = 1; c.strokeStyle = '#ffd96a'; c.setLineDash([3, 5]); c.beginPath(); c.moveTo(g.x, g.y); c.quadraticCurveTo((g.x + pz.x) / 2, Math.min(g.y, pz.y) - 40, pz.x, pz.y); c.stroke(); c.setLineDash([]); }   // тонкая нить к кольцу
-    const tw = 0.7 + 0.3 * Math.sin(t / 240 + j * 1.7), sz = (7 + 7 * ck) * tw; c.globalAlpha = (0.35 + 0.65 * ck) * tw; if (ck > 0.3) glow(c, GLOW.gold, pz.x, pz.y, 6 + 6 * ck, 0.4 * ck * tw); c.drawImage(STAR, pz.x - sz / 2, pz.y - sz / 2, sz, sz); c.restore(); }   // искорка — блик сверху
+    const tw = 0.7 + 0.3 * Math.sin(t / 240 + j * 1.7), sz = (7 + 7 * ck) * tw; c.globalAlpha = (0.35 + 0.65 * ck) * tw * ap; if (ck > 0.3) glow(c, GLOW.gold, pz.x, pz.y, 6 + 6 * ck, 0.4 * ck * tw); c.drawImage(STAR, pz.x - sz / 2, pz.y - sz / 2, sz, sz); c.restore(); });   // искорка — блик сверху
 }
 // веер нитей (v52): из кольца к каждой карте пачки своя нить — головка-звезда по дуге с хвостом, по прилёту вспышка; переворот карты запланирован на прилёт
 function drawSparkThread(c, f, t){
   const q = Math.min(1, (t - f.t0) / f.dur), bend = f.bend, nx = -(f.y1 - f.y0), ny = f.x1 - f.x0, nl = Math.hypot(nx, ny) || 1; if (q < 0) return;
   const at = (u) => { const ee = easeInOutSine(u), sb = Math.sin(Math.PI * u) * bend; return [f.x0 + (f.x1 - f.x0) * ee + nx / nl * sb, f.y0 + (f.y1 - f.y0) * ee + ny / nl * sb]; };
-  if (q >= 1){ if (!f.hit){ f.hit = true; burst(f.x1, f.y1, 4, 24, 360, f.t0 | 0); spawn('puff', 2, f.x1, f.y1, { life: CFG.FX.PUFF_MS * 0.8 }, f.card); Audio.flip(f.k || 0); Audio.land(0.35, 0.02); }   // «бах» мягче (v55): вспышка короче, пыль вполовину, без дрожи
-    const hk = Math.max(0, 1 - (t - f.t0 - f.dur) / 140); if (hk > 0 && !REDUCED) glow(c, GLOW.white, f.x1, f.y1, 10 + 10 * (1 - hk), 0.6 * hk); return; }
+  if (q >= 1){ if (!f.hit){ f.hit = true; Audio.flip(f.k || 0); }   // v62: прилёт — короткий блик по кромке карты, без вспышки и пыли; шелест по порядку
+    const hk = Math.max(0, 1 - (t - f.t0 - f.dur) / 180); if (hk > 0 && !REDUCED){ const Q = cardQuad(f.card); if (Q[0].z <= 1){ c.save(); c.globalAlpha = 0.9 * hk; c.lineJoin = 'round'; c.lineWidth = 2.5; c.strokeStyle = '#fff3c4';
+      c.beginPath(); c.moveTo(Q[0].x / scale, Q[0].y / scale); for (let k = 1; k < 4; k++) c.lineTo(Q[k].x / scale, Q[k].y / scale); c.closePath(); c.stroke(); c.restore(); } } return; }
   for (let k = 1; k <= 6; k++){ const u = q - k * 0.035; if (u <= 0) break; const [x, y] = at(u); c.save(); c.globalAlpha = 0.6 * (1 - k / 7); c.drawImage(STAR, x - 3, y - 3, 6, 6); c.restore(); }   // хвост
   const [x, y] = at(q); glow(c, GLOW.gold, x, y, 14, 0.7, 10); c.save(); c.translate(x, y); c.rotate(q * 5); c.drawImage(STAR, -6, -6, 12, 12); c.restore();
 }
@@ -5213,8 +5231,10 @@ function searchHit(hit){
   if (Z.whole && r.spark){                      // «смотри — вот эти — бах» (v54): кольцо вспыхивает (ringReadyAt), карты в ореоле READY_MS, затем веер нитей
     const W = CFG.WHOLE, g = goalGeo(), [m0, m1] = W.SPARK_THREAD_MS, n = r.faced.length, R = mulberry32(Z.taps * 13 + 5), ready = r.rescue ? 0 : W.READY_MS;   // (ближние быстрее); по прилёту вспышка, пыль, переворот с подскоком, звук по порядку, дрожь на первом
     G.ready = { t0: t, until: t + ready, cards: r.faced.slice(), rescue: r.rescue, bah: false }; G.ringReadyAt = t; G.chargeFrom = charge0 >= (G.chargeN || 0) - 1e-9 ? G.chargeN : Math.min(G.chargeN || 0, charge0 + 1.5); G.chargeTo = 0; G.chargeN = Z.chargeN; G.chargeAt = t + ready + 120;
-    r.faced.forEach((j, k) => { const c1 = cardCenter(j), dur = m0 + (m1 - m0) * (n > 1 ? k / (n - 1) : 0) + (R() - 0.5) * 60;
-      addFx({ kind: 'spark.thread', t0: t + ready, x0: g.x, y0: g.y, x1: c1.x / scale, y1: c1.y / scale, dur, card: j, k, bend: (R() - 0.5) * 120, info: 'card=' + j }); animCard(j, 3, t + ready + dur); });
+    const order = r.faced.slice().sort((a, b) => Math.hypot(P.x[a] - Z.front.x, P.y[a] - Z.front.y) - Math.hypot(P.x[b] - Z.front.x, P.y[b] - Z.front.y));   // ближняя к фронту первой, шаг FLIP_STEP_MS2
+    order.forEach((j, k) => { const c1 = cardCenter(j), dur = m0 + k * W.FLIP_STEP_MS2;
+      addFx({ kind: 'spark.thread', t0: t + ready, x0: g.x, y0: g.y, x1: c1.x / scale, y1: c1.y / scale, dur, card: j, k, bend: (R() - 0.5) * 120, info: 'card=' + j }); animCard(j, 4, t + ready + dur); });
+    G.markHold = t + ready + m0 + (n - 1) * W.FLIP_STEP_MS2 + CFG.FLIP4_S * 1000 + 140 + W.PACK_PAUSE_MS; G.markShowAt = G.markHold;   // новые пометки — только после паузы за последним переворотом (v62)
     if (r.rescue) Audio.heatUp(1); else Audio.ready(); log('event', r.rescue ? 'spark.rescue' : 'spark.pack', 'n=' + n); }
   else r.opened.filter(j => j !== Z.gold).sort((a, b) => Math.hypot(P.x[a] - P.x[hit], P.y[a] - P.y[hit]) - Math.hypot(P.x[b] - P.x[hit], P.y[b] - P.y[hit]))
     .forEach((j, k) => { animCard(j, 1, t + FX.FLIP_DELAY_MS + stepMs * k); if (k < FX.FLIP_SOUND_MAX) Audio.flip(k); });
@@ -5513,7 +5533,8 @@ function tick(t, fromRaf){
     G.heatK += (hTo - G.heatK) * (REDUCED ? 1 : fk(hTo > G.heatK ? 0.06 : 0.1));
     if (Math.abs(G.chainZoomK - 1) < 1e-4) G.chainZoomK = 1;
     S.mesh.material.uniforms.uHeat.value.set(G.heatPt.x, G.heatPt.z, CFG.FX.HEAT_R, REDUCED ? 0 : G.heatK);
-    S.mesh.material.uniforms.uMark.value = Zw && G.phase === 'play' ? markStrength(t, Zw) : 0; }
+    S.mesh.material.uniforms.uMark.value = Zw && G.phase === 'play' ? markStrength(t, Zw) : 0;
+    if (G.markHold && t >= G.markHold){ G.markHold = 0; refreshData(); G.bufAt = t; log('event', 'marks.show', 'n=' + (Zw ? Zw.bufN : 0)); } }   // пауза кончилась — новые пометки и число в кольце (v62)
   if (G.meltPending && G.phase === 'play' && G.screen === 'game' && !G.fx.some(f => f.kind === 'goldasm' || f.kind === 'jokerasm' || f.kind === 'golddraw')){ const mp = G.meltPending; G.meltPending = null; wholeMelt(t, mp.pct, mp.left); }   // веха ждёт конца сборок
   { const M = G.melt, W = CFG.WHOLE, FXm = CFG.FX;   // веха: высота стога оседает к hTo с пружинкой и пылью, потом нырок обратно
     if (M && M.holdAt){ const k = (t - M.holdAt) / (W.MELT_HOLD_MS * 0.6), dh = Math.max(0, M.hFrom - M.hTo);
@@ -5667,6 +5688,8 @@ window.STOG = {
     G.wholeMile = Math.floor(G.srch.removed / P.N / CFG.WHOLE.MILE); G.wholeH = wholeHFor(P.N - G.srch.removed, P.N); G.pileH = G.wholeH; refreshData(); hud(); searchSave(true);
     if (G.phase === 'over'){ wholeDive(); this.settle(); } return this.sstate(); },   // хук — сразу в игру (общий план — STOG.wover())
   wover(frac){ if (frac) this.whole(frac); else startSearch(0, true); camTw = null; G.melt = null; G.meltPending = null; G.diveMs = 0; wholeFakeOn(); Object.assign(CAM, wholeFakePose()); G.phase = 'over'; G.phaseUntil = now() + 1e9; G.sfocus = { x: G.srch.front.x, z: G.srch.front.y }; return this.sstate(); },   // общий план «Одного стога» (фейковый стог меню) без автонырка (кадры)
+  wflip(){ const Z = G.srch; if (!Z || !Z.whole) return null; const a = S.aAnim.array, tn = (now() - T0) / 1000, F4 = CFG.FLIP4_S; let flipping = 0; for (let i = 0; i < Z.P.N; i++){ const o = S.instOf[i] * 2; if (a[o + 1] > 3.5 && tn >= a[o] && tn < a[o] + F4 + 0.14) flipping++; }
+    return { flipping, threads: G.fx.filter(f => f.kind === 'spark.thread').length, marksVisible: G.markHold > now() ? 0 : Z.bufN, hold: Math.max(0, Math.round((G.markHold || 0) - now())) }; },   // стенд: переворачиваемых сейчас и видимых пометок
   ach(id){ if (id === 'reset'){ G.save.ach = { done: {}, total: 0 }; save(); return 0; } achUnlock(id); return Object.keys(G.save.ach.done); },   // открыть ачивку (кадры)
   wring(n, charge, packN){ const Z = G.srch; if (!Z || !Z.whole) return null; Z.chargeN = n; Z.charge = charge || 0; if (packN) Z.packN = packN; wholeBufUpdate(Z); return { n: Z.chargeN, charge: Z.charge, packN: Z.packN, marks: Z.bufList.length, left: Math.ceil(Z.chargeN - Z.charge) }; },   // кадры: кольцо (снятий, заряд), N карт пачки
   wrise(){ if (G.phase === 'play' && !camTw){ G.phase = 'over'; G.phaseUntil = now() + 1e9; wholeRise(CFG.WHOLE.RISE_MS, 'rise'); } return G.phase; },   // подъём на общий план, как по кнопке «вся куча»
